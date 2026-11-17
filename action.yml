@@ -1,0 +1,54 @@
+name: ComplyRobin rotation runner
+description: Rotates API keys that are due in your own OpenAI and Laravel Cloud accounts, and reports the evidence to ComplyRobin. Keys never leave your GitHub account.
+author: ComplyRobin
+branding:
+  icon: refresh-cw
+  color: blue
+
+inputs:
+  command:
+    description: "run (rotate what is due) or check (test the tokens, rotate nothing)."
+    required: false
+    default: run
+  organisation:
+    description: Your organisation's address name in ComplyRobin.
+    required: true
+  runner-token:
+    description: The runner token ComplyRobin showed you once. Store it as a repository secret.
+    required: true
+  openai-admin-key:
+    description: An OpenAI admin key, to make and retire service account keys. Store it as a repository secret.
+    required: false
+    default: ""
+  laravel-cloud-token:
+    description: A Laravel Cloud API token, to update secrets and redeploy. Store it as a repository secret.
+    required: false
+    default: ""
+  api-url:
+    description: Where ComplyRobin's API is. Leave it as it is unless ComplyRobin tells you otherwise.
+    required: false
+    default: https://api.complyrobin.com/v1
+  php-version:
+    description: Set (e.g. 8.4) to install PHP with shivammathur/setup-php. Leave empty to use the PHP already on the machine (GitHub's Ubuntu machines have it).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.php-version != ''
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ inputs.php-version }}
+        extensions: curl, sodium
+        coverage: none
+
+    - shell: bash
+      env:
+        COMPLYROBIN_ORGANISATION: ${{ inputs.organisation }}
+        COMPLYROBIN_RUNNER_TOKEN: ${{ inputs.runner-token }}
+        OPENAI_ADMIN_KEY: ${{ inputs.openai-admin-key }}
+        LARAVEL_CLOUD_API_TOKEN: ${{ inputs.laravel-cloud-token }}
+        COMPLYROBIN_API_URL: ${{ inputs.api-url }}
+        RUNNER_COMMAND: ${{ inputs.command }}
+      run: php "$GITHUB_ACTION_PATH/bin/complyrobin-runner" "$RUNNER_COMMAND"

@@ -1,0 +1,26 @@
+# Copy this file to .github/workflows/rotate-keys.yml in a private repository of yours.
+# Add the four secrets under Settings → Secrets and variables → Actions.
+name: Rotate keys
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # every hour; ComplyRobin decides what is actually due
+  workflow_dispatch:       # lets you run it by hand, e.g. after pressing "Rotate now"
+
+permissions: {}            # the runner needs no access to the repository itself
+
+concurrency:
+  group: rotate-keys
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: complyrobin/runner@v0
+        with:
+          organisation: your-organisation
+          runner-token: ${{ secrets.COMPLYROBIN_RUNNER_TOKEN }}
+          openai-admin-key: ${{ secrets.OPENAI_ADMIN_KEY }}
+          laravel-cloud-token: ${{ secrets.LARAVEL_CLOUD_API_TOKEN }}
