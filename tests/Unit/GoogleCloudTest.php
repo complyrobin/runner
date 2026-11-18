@@ -10,6 +10,7 @@ use ComplyRobin\Runner\GoogleCloud\GoogleCloudSource;
 use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 use ComplyRobin\Runner\LaravelCloud\LaravelCloudClient;
+use ComplyRobin\Runner\LaravelCloud\LaravelCloudDestination;
 use ComplyRobin\Runner\Rotator;
 use ComplyRobin\Runner\Runner;
 use ComplyRobin\Runner\Tests\Fakes\FakeHttpClient;
@@ -33,7 +34,7 @@ final class GoogleCloudTest extends TestCase
     /** @var list<array{name: string, disabled?: bool}> what Google Cloud holds for the service account */
     private array $keys = [];
 
-    private string $privateKey = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\nMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu\n-----END PRIVATE KEY-----\n";
+    private string $privateKey;
 
     private string $keyPair;
 
@@ -44,17 +45,23 @@ final class GoogleCloudTest extends TestCase
     {
         $this->keys = [['name' => 'projects/acme-prod/serviceAccounts/'.self::EMAIL.'/keys/0ldkey0000000000000000000000000000000001']];
         $this->keyPair = sodium_crypto_box_keypair();
+        $rsa = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        $this->assertNotFalse($rsa);
+        openssl_pkey_export($rsa, $privateKey);
+        $this->privateKey = $privateKey;
 
         $this->http = (new FakeHttpClient)
-            ->on('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
-            ->on('POST /runner/acme/reports', FakeHttpClient::json(['recorded' => true]))
+            ->on('POST /runner/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
+            ->on('POST /runner/reports', FakeHttpClient::json(['recorded' => true]))
             ->on('GET iam.googleapis.com/v1/'.self::KEYS, fn (): Response => FakeHttpClient::json(['keys' => $this->keys]))
             ->on('POST iam.googleapis.com/v1/'.self::KEYS, fn (Request $request): Response => $this->create($request))
             ->on('POST :disable', fn (Request $request): Response => $this->disable($request))
             ->on('DELETE iam.googleapis.com/v1/projects/', fn (Request $request): Response => $this->delete($request))
+            ->on('POST oauth2.googleapis.com/token', FakeHttpClient::json(['access_token' => 'ya29.new-key-works', 'expires_in' => 3599]))
             ->on('GET /secrets/public-key', FakeHttpClient::json(['data' => ['id' => 'kp-1', 'attributes' => ['public_key' => base64_encode(sodium_crypto_box_publickey($this->keyPair))]]]))
             ->on('PATCH /secrets/', FakeHttpClient::json(['data' => ['id' => 'sec']]))
-            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1']]));
+            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1']]))
+            ->on('GET /deployments/dep-1', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'deployment.succeeded']]]));
     }
 
     #[Test]
@@ -88,9 +95,9 @@ final class GoogleCloudTest extends TestCase
         })->run();
 
         $this->assertContains($this->privateKey, $masked);
-        $this->assertContains('MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu', $masked);
+        $this->assertContains(explode("\n", $this->privateKey)[1], $masked);
 
-        foreach ($this->http->sentTo('POST', '/runner/acme/') as $request) {
+        foreach ($this->http->sentTo('POST', '/runner/') as $request) {
             $this->assertStringNotContainsString('PRIVATE KEY', (string) json_encode($request->json));
             $this->assertStringNotContainsString('MzEfYyji', (string) json_encode($request->json));
         }
@@ -168,8 +175,8 @@ final class GoogleCloudTest extends TestCase
         $clock = static fn (): DateTimeImmutable => new DateTimeImmutable('2026-11-17T10:00:00', new DateTimeZone('UTC'));
 
         return new Runner(
-            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'acme', 'crr_'.str_repeat('a', 60)),
-            new Rotator(['google_cloud' => new GoogleCloudSource(new GoogleCloudClient($this->http, 'ya29.runner-token'))], new LaravelCloudClient($this->http, 'lc-token'), $clock, $mask),
+            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'crr_0193c0de00007000800000000000000a_'.str_repeat('a', 48)),
+            new Rotator(['google_cloud' => new GoogleCloudSource(new GoogleCloudClient($this->http, 'ya29.runner-token'))], ['laravel_cloud' => new LaravelCloudDestination(new LaravelCloudClient($this->http, 'lc-token'))], $clock, $mask, sleep: static function (int $seconds): void {}),
             ['ya29.runner-token'],
             function (string $line): void {
                 $this->output[] = $line;
@@ -231,14 +238,14 @@ final class GoogleCloudTest extends TestCase
      */
     private function reports(): array
     {
-        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/acme/reports'));
+        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/reports'));
     }
 
     private function withFirstClaim(array $job): FakeHttpClient
     {
         $property = new \ReflectionProperty(FakeHttpClient::class, 'routes');
         $routes = $property->getValue($this->http);
-        $routes['POST /runner/acme/claims'] = [FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []])];
+        $routes['POST /runner/claims'] = [FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []])];
         $property->setValue($this->http, $routes);
 
         return $this->http;

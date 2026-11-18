@@ -36,6 +36,5 @@ jobs:
         id: no-settings
         continue-on-error: true
         with:
-          organisation: ""
-          runner-token: ""
+          token: ""
       - run: test "${{ steps.no-settings.outcome }}" = "failure"

@@ -12,6 +12,7 @@ use ComplyRobin\Runner\ComplyRobin\ComplyRobinClient;
 use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 use ComplyRobin\Runner\LaravelCloud\LaravelCloudClient;
+use ComplyRobin\Runner\LaravelCloud\LaravelCloudDestination;
 use ComplyRobin\Runner\Rotator;
 use ComplyRobin\Runner\Runner;
 use ComplyRobin\Runner\Tests\Fakes\FakeHttpClient;
@@ -44,12 +45,14 @@ final class AwsTest extends TestCase
         $this->keyPair = sodium_crypto_box_keypair();
 
         $this->http = (new FakeHttpClient)
-            ->on('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
-            ->on('POST /runner/acme/reports', FakeHttpClient::json(['recorded' => true]))
+            ->on('POST /runner/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
+            ->on('POST /runner/reports', FakeHttpClient::json(['recorded' => true]))
             ->on('POST iam.amazonaws.com', fn (Request $request): Response => $this->iam($request))
+            ->on('POST sts.amazonaws.com', new Response(200, '<GetCallerIdentityResponse><GetCallerIdentityResult><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>'))
             ->on('GET /secrets/public-key', FakeHttpClient::json(['data' => ['id' => 'kp-1', 'attributes' => ['public_key' => base64_encode(sodium_crypto_box_publickey($this->keyPair))]]]))
             ->on('PATCH /secrets/', FakeHttpClient::json(['data' => ['id' => 'sec']]))
-            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1']]));
+            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1']]))
+            ->on('GET /deployments/dep-1', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'deployment.succeeded']]]));
     }
 
     #[Test]
@@ -109,7 +112,7 @@ final class AwsTest extends TestCase
     {
         $this->runner()->run();
 
-        foreach ($this->http->sentTo('POST', '/runner/acme/') as $request) {
+        foreach ($this->http->sentTo('POST', '/runner/') as $request) {
             $this->assertStringNotContainsString(self::NEW_SECRET, (string) json_encode($request->json));
             $this->assertStringNotContainsString(self::NEW_ID, (string) json_encode($request->json));
         }
@@ -202,8 +205,8 @@ final class AwsTest extends TestCase
         $iam = new IamClient($this->http, new AwsCredentials('AKIARUNNERACCESS0001', 'runner-secret'), $clock);
 
         return new Runner(
-            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'acme', 'crr_'.str_repeat('a', 60)),
-            new Rotator(['aws' => new AwsSource($iam)], new LaravelCloudClient($this->http, 'lc-token'), $clock),
+            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'crr_0193c0de00007000800000000000000a_'.str_repeat('a', 48)),
+            new Rotator(['aws' => new AwsSource($iam)], ['laravel_cloud' => new LaravelCloudDestination(new LaravelCloudClient($this->http, 'lc-token'))], $clock, sleep: static function (int $seconds): void {}),
             ['runner-secret'],
             function (string $line): void {
                 $this->output[] = $line;
@@ -270,7 +273,7 @@ final class AwsTest extends TestCase
      */
     private function reports(): array
     {
-        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/acme/reports'));
+        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/reports'));
     }
 
     private function replace(string $route, Response ...$answers): FakeHttpClient
@@ -285,7 +288,7 @@ final class AwsTest extends TestCase
 
     private function withFirstClaim(array $job): FakeHttpClient
     {
-        return $this->replace('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []]));
+        return $this->replace('POST /runner/claims', FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []]));
     }
 
     private function job(): array

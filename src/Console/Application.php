@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace ComplyRobin\Runner\Console;
 
 use Closure;
+use ComplyRobin\Runner\Checker;
 use ComplyRobin\Runner\Config;
+use ComplyRobin\Runner\Exceptions\ApiError;
 use ComplyRobin\Runner\Exceptions\ConfigurationError;
 use ComplyRobin\Runner\Factory;
 use ComplyRobin\Runner\Http\HttpClient;
@@ -23,17 +25,25 @@ final readonly class Application
 
         Usage:
           complyrobin-runner [run]   Check in with ComplyRobin and rotate every key that is due.
-          complyrobin-runner check   Check the settings and that each service accepts the runner's access. Rotates nothing.
+          complyrobin-runner check   Test the runner's access to each service and send the results to ComplyRobin.
+                                     Rotates nothing.
 
-        Settings (environment variables). Set only the providers you use:
-          COMPLYROBIN_RUNNER_TOKEN   The runner token ComplyRobin showed you once (crr_…).
-          COMPLYROBIN_ORGANISATION   Your organisation's address name in ComplyRobin.
+        Settings (environment variables). Set only the ones you use:
+          COMPLYROBIN_TOKEN          The runner token ComplyRobin showed you once (crr_…).
+
+          Where keys are made:
           OPENAI_ADMIN_KEY           An OpenAI admin key, to make and retire service account keys.
           AWS_ACCESS_KEY_ID          AWS access that can manage the IAM users' access keys (with
           AWS_SECRET_ACCESS_KEY      AWS_SESSION_TOKEN when it is short-lived, as from GitHub's OIDC sign-in).
           GOOGLE_CLOUD_ACCESS_TOKEN  A Google Cloud access token that can manage service account keys, or
           GOOGLE_CLOUD_CREDENTIALS   the key file (JSON) of a service account that can.
+
+          Where keys go (AWS and Google Cloud secrets use the access above):
           LARAVEL_CLOUD_API_TOKEN    A Laravel Cloud API token, to update secrets and redeploy.
+          GH_SECRETS_TOKEN       A GitHub token that can write the repository's Actions secrets.
+          FORGE_API_TOKEN            A Laravel Forge API token, to update a site's environment and deploy.
+          VERCEL_TOKEN               A Vercel token, to update environment variables and redeploy.
+
           COMPLYROBIN_API_URL        Optional. Defaults to https://api.complyrobin.com/v1.
         TXT;
 
@@ -81,35 +91,30 @@ final readonly class Application
         return $command === 'check' ? $this->check($config) : Factory::runner($config, $this->http, $this->output)->run();
     }
 
+    /**
+     * Tests every service, then sends the results to ComplyRobin, which also proves the token works.
+     */
     private function check(Config $config): int
     {
-        $sources = Factory::sources($config, $this->http);
-        $services = [
-            'OpenAI' => $sources['openai'] ?? null,
-            'AWS' => $sources['aws'] ?? null,
-            'Google Cloud' => $sources['google_cloud'] ?? null,
-            'Laravel Cloud' => Factory::laravelCloud($config, $this->http),
-        ];
-        $healthy = true;
+        $results = Factory::checker($config, $this->http)->run();
 
-        foreach ($services as $service => $client) {
-            if ($client === null) {
-                ($this->output)("{$service}: no access set, so this runner can't use it.");
-
-                continue;
-            }
-
-            try {
-                $client->check();
-                ($this->output)("{$service}: the access works.");
-            } catch (Throwable $exception) {
-                $healthy = false;
-                ($this->output)("{$service}: ".Redact::text($exception->getMessage(), 300, $config->secrets()));
-            }
+        foreach ($results as $result) {
+            ($this->output)("{$result['service']}: {$result['message']}");
         }
 
-        ($this->output)("ComplyRobin: will check in at {$config->apiUrl} for {$config->organisation}. The token is checked on the first run.");
+        try {
+            Factory::complyRobin($config, $this->http)->sendCheck($results);
+            ($this->output)('ComplyRobin: the token works, and the results are on the Rotation runners page.');
+        } catch (ApiError $error) {
+            ($this->output)('ComplyRobin: '.($error->status === 401 ? 'the token was refused. Copy it again from ComplyRobin, or add a new runner there.' : Redact::text($error->getMessage(), 300, $config->secrets())));
 
-        return $healthy ? 0 : 1;
+            return Runner::UNREACHABLE;
+        } catch (Throwable $exception) {
+            ($this->output)('ComplyRobin: '.Redact::text($exception->getMessage(), 300, $config->secrets()));
+
+            return Runner::UNREACHABLE;
+        }
+
+        return Checker::healthy($results) ? Runner::OK : Runner::ROTATION_FAILED;
     }
 }

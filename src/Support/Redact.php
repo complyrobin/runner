@@ -19,7 +19,7 @@ final class Redact
         '/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}/',     // Stripe style keys
         '/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{8,}/',
         '/\bgithub_pat_[A-Za-z0-9_]{8,}/',
-        '/\bcrr_[A-Za-z0-9]{8,}/',                            // ComplyRobin runner tokens
+        '/\bcrr_[A-Za-z0-9_]{8,}/',                           // ComplyRobin runner tokens
         '/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/',                    // AWS access key ids
         '/\bya29\.[A-Za-z0-9._-]{20,}/',                       // Google access tokens
         '/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.?[A-Za-z0-9_-]*/', // JWTs

@@ -10,23 +10,21 @@ use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 
 /**
- * The two runner endpoints: claim due work, report how it went. Neither ever receives a key.
+ * The runner endpoints: claim due work, report how it went, and send the results of a test. None of them ever
+ * receives a key. The token names the organisation, so the addresses don't.
  */
 final readonly class ComplyRobinClient
 {
     public function __construct(
         private HttpClient $http,
         private string $baseUrl,
-        private string $organisation,
         private string $token,
     ) {}
 
     /**
-     * @return list<Job>
-     *
      * @throws ApiError
      */
-    public function claim(): array
+    public function claim(): Claim
     {
         $response = $this->post('claims', null);
 
@@ -34,9 +32,13 @@ final readonly class ComplyRobinClient
             throw ApiError::from('ComplyRobin', $response);
         }
 
-        $jobs = $response->json()['jobs'] ?? [];
+        $json = $response->json();
+        $jobs = $json['jobs'] ?? [];
 
-        return array_map(Job::fromArray(...), array_values(array_filter(is_array($jobs) ? $jobs : [], is_array(...))));
+        return new Claim(
+            array_map(Job::fromArray(...), array_values(array_filter(is_array($jobs) ? $jobs : [], is_array(...)))),
+            ($json['check_requested'] ?? false) === true,
+        );
     }
 
     /**
@@ -50,13 +52,29 @@ final readonly class ComplyRobinClient
     }
 
     /**
+     * Sends the results of a test of the runner's access, which ComplyRobin shows on the Rotation runners page.
+     *
+     * @param  list<array{service: string, status: string, message: string}>  $results
+     *
+     * @throws ApiError
+     */
+    public function sendCheck(array $results): void
+    {
+        $response = $this->post('checks', ['services' => $results]);
+
+        if (! $response->successful()) {
+            throw ApiError::from('ComplyRobin', $response);
+        }
+    }
+
+    /**
      * @param  array<string, mixed>|null  $json
      */
     private function post(string $endpoint, ?array $json): Response
     {
         return $this->http->send(new Request(
             'POST',
-            rtrim($this->baseUrl, '/').'/runner/'.rawurlencode($this->organisation).'/'.$endpoint,
+            rtrim($this->baseUrl, '/').'/runner/'.$endpoint,
             ['Authorization' => 'Bearer '.$this->token],
             $json,
         ));

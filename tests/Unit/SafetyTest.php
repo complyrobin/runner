@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
 
 final class SafetyTest extends TestCase
 {
-    private const string TOKEN = 'crr_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    private const string TOKEN = 'crr_0193c0de00007000800000000000000b_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
     /**
      * @return array<string, array{string}>
@@ -109,8 +109,7 @@ final class SafetyTest extends TestCase
     public function it_reads_aws_and_google_cloud_access_and_hides_it(): void
     {
         $config = Config::fromEnvironment([
-            'COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN,
-            'COMPLYROBIN_ORGANISATION' => 'acme',
+            'COMPLYROBIN_TOKEN' => self::TOKEN,
             'AWS_ACCESS_KEY_ID' => 'AKIAIOSFODNN7EXAMPLE',
             'AWS_SECRET_ACCESS_KEY' => 'aws-secret',
             'AWS_SESSION_TOKEN' => 'aws-session',
@@ -125,7 +124,7 @@ final class SafetyTest extends TestCase
     #[Test]
     public function it_reads_its_settings_and_hides_the_tokens(): void
     {
-        $config = Config::fromEnvironment(['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'acme', 'OPENAI_ADMIN_KEY' => 'sk-admin-x', 'GITHUB_ACTIONS' => 'true']);
+        $config = Config::fromEnvironment(['COMPLYROBIN_TOKEN' => self::TOKEN, 'OPENAI_ADMIN_KEY' => 'sk-admin-x', 'GITHUB_ACTIONS' => 'true']);
 
         $this->assertSame(Config::DEFAULT_API_URL, $config->apiUrl);
         $this->assertTrue($config->inGitHubActions);
@@ -134,17 +133,36 @@ final class SafetyTest extends TestCase
         $this->assertStringNotContainsString(self::TOKEN, print_r($config, true));
     }
 
+    #[Test]
+    public function it_reads_the_destination_tokens_and_hides_them(): void
+    {
+        $config = Config::fromEnvironment([
+            'COMPLYROBIN_TOKEN' => self::TOKEN,
+            'GH_SECRETS_TOKEN' => 'github_pat_x',
+            'FORGE_API_TOKEN' => 'forge-x',
+            'VERCEL_TOKEN' => 'vercel-x',
+        ]);
+
+        $this->assertSame([self::TOKEN, 'github_pat_x', 'forge-x', 'vercel-x'], $config->secrets());
+        $this->assertStringNotContainsString('forge-x', print_r($config, true));
+    }
+
+    #[Test]
+    public function it_redacts_runner_tokens_whole(): void
+    {
+        $this->assertSame('token [redacted] refused', Redact::text('token '.self::TOKEN.' refused'));
+    }
+
     /**
      * @return array<string, array{array<string, string>, string}>
      */
     public static function badSettings(): array
     {
         return [
-            'no token' => [['COMPLYROBIN_ORGANISATION' => 'acme'], 'Set COMPLYROBIN_RUNNER_TOKEN'],
-            'not a runner token' => [['COMPLYROBIN_RUNNER_TOKEN' => 'sk-proj-abc', 'COMPLYROBIN_ORGANISATION' => 'acme'], 'is not a runner token'],
-            'no organisation' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN], 'Set COMPLYROBIN_ORGANISATION'],
-            'bad organisation' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'Acme Ltd'], 'lower-case letters'],
-            'half of an AWS key' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'acme', 'AWS_ACCESS_KEY_ID' => 'AKIAIOSFODNN7EXAMPLE'], 'Set both AWS_ACCESS_KEY_ID'],
+            'no token' => [[], 'Set COMPLYROBIN_TOKEN'],
+            'not a runner token' => [['COMPLYROBIN_TOKEN' => 'sk-proj-abc'], 'is not a runner token'],
+            'an old runner token without the organisation' => [['COMPLYROBIN_TOKEN' => 'crr_'.str_repeat('b', 60)], 'is not a runner token'],
+            'half of an AWS key' => [['COMPLYROBIN_TOKEN' => self::TOKEN, 'AWS_ACCESS_KEY_ID' => 'AKIAIOSFODNN7EXAMPLE'], 'Set both AWS_ACCESS_KEY_ID'],
         ];
     }
 

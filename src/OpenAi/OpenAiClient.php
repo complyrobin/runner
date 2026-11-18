@@ -88,6 +88,19 @@ final readonly class OpenAiClient
     }
 
     /**
+     * GET /v1/models with the new key itself. Only a 401 means the key doesn't work: a key whose service account may
+     * not list models is answered 403, which still proves OpenAI accepts it.
+     */
+    public function verifyKey(string $key): void
+    {
+        $response = $this->http->send(new Request('GET', rtrim($this->baseUrl, '/').'/models?limit=1', ['Authorization' => 'Bearer '.$key]));
+
+        if ($response->status !== 403 && ! $response->successful()) {
+            throw ApiError::from('OpenAI', $response);
+        }
+    }
+
+    /**
      * A cheap call that proves the admin key works.
      */
     public function check(): void
