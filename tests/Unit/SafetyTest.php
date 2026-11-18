@@ -7,7 +7,7 @@ namespace ComplyRobin\Runner\Tests\Unit;
 use ComplyRobin\Runner\Config;
 use ComplyRobin\Runner\Exceptions\ConfigurationError;
 use ComplyRobin\Runner\LaravelCloud\SealedBox;
-use ComplyRobin\Runner\OpenAi\NewKey;
+use ComplyRobin\Runner\NewKey;
 use ComplyRobin\Runner\Support\Redact;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -29,6 +29,8 @@ final class SafetyTest extends TestCase
             'runner token' => [self::TOKEN],
             'GitHub token' => ['ghp_'.str_repeat('x', 36)],
             'JWT' => ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl'],
+            'AWS access key id' => ['Key AKIAIOSFODNN7EXAMPLE is not valid'],
+            'Google access token' => ['Bearer ya29.a0AfB_byC1234567890abcdefghij'],
             'base64 blob' => [base64_encode(random_bytes(48)).'Aa1'],
         ];
     }
@@ -38,7 +40,7 @@ final class SafetyTest extends TestCase
     public function it_removes_anything_shaped_like_a_secret(string $text): void
     {
         $this->assertStringContainsString('[redacted]', Redact::text($text));
-        $this->assertDoesNotMatchRegularExpression('/sk-|crr_|ghp_|eyJ/', Redact::text($text));
+        $this->assertDoesNotMatchRegularExpression('/sk-|crr_|ghp_|eyJ|AKIA|ya29/', Redact::text($text));
     }
 
     #[Test]
@@ -88,6 +90,39 @@ final class SafetyTest extends TestCase
     }
 
     #[Test]
+    public function it_hides_every_sensitive_piece_of_a_key_and_keeps_only_its_plain_parts(): void
+    {
+        $key = new NewKey('abc123', '{"private_key": "secret"}', null, '0123', ['key_id' => 'AKIAEXAMPLE'], ['secret-piece']);
+
+        $this->assertSame(['{"private_key": "secret"}', 'secret-piece'], $key->secrets());
+        $this->assertSame('0123', $key->hint());
+        $this->assertSame('AKIAEXAMPLE', $key->part('key_id'));
+        $this->assertNull($key->part('other'));
+
+        $key->forget();
+
+        $this->assertSame([], $key->secrets());
+        $this->assertSame('AKIAEXAMPLE', $key->part('key_id'));
+    }
+
+    #[Test]
+    public function it_reads_aws_and_google_cloud_access_and_hides_it(): void
+    {
+        $config = Config::fromEnvironment([
+            'COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN,
+            'COMPLYROBIN_ORGANISATION' => 'acme',
+            'AWS_ACCESS_KEY_ID' => 'AKIAIOSFODNN7EXAMPLE',
+            'AWS_SECRET_ACCESS_KEY' => 'aws-secret',
+            'AWS_SESSION_TOKEN' => 'aws-session',
+            'GOOGLE_CLOUD_ACCESS_TOKEN' => 'ya29.token',
+        ]);
+
+        $this->assertSame('aws-session', $config->aws()?->sessionToken);
+        $this->assertSame([self::TOKEN, 'aws-secret', 'aws-session', 'ya29.token'], $config->secrets());
+        $this->assertStringNotContainsString('aws-secret', print_r($config, true));
+    }
+
+    #[Test]
     public function it_reads_its_settings_and_hides_the_tokens(): void
     {
         $config = Config::fromEnvironment(['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'acme', 'OPENAI_ADMIN_KEY' => 'sk-admin-x', 'GITHUB_ACTIONS' => 'true']);
@@ -109,6 +144,7 @@ final class SafetyTest extends TestCase
             'not a runner token' => [['COMPLYROBIN_RUNNER_TOKEN' => 'sk-proj-abc', 'COMPLYROBIN_ORGANISATION' => 'acme'], 'is not a runner token'],
             'no organisation' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN], 'Set COMPLYROBIN_ORGANISATION'],
             'bad organisation' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'Acme Ltd'], 'lower-case letters'],
+            'half of an AWS key' => [['COMPLYROBIN_RUNNER_TOKEN' => self::TOKEN, 'COMPLYROBIN_ORGANISATION' => 'acme', 'AWS_ACCESS_KEY_ID' => 'AKIAIOSFODNN7EXAMPLE'], 'Set both AWS_ACCESS_KEY_ID'],
         ];
     }
 

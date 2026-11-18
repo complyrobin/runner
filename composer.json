@@ -8,6 +8,8 @@
         "key rotation",
         "secrets",
         "openai",
+        "aws",
+        "google cloud",
         "laravel cloud",
         "github action"
     ],
@@ -22,6 +24,7 @@
         "phpunit/phpunit": "^11.5"
     },
     "suggest": {
+        "ext-openssl": "Needed only to sign in to Google Cloud with a service account key file (GOOGLE_CLOUD_CREDENTIALS).",
         "laravel/framework": "Run the runner from your Laravel app's scheduler: Schedule::exec(base_path('vendor/bin/complyrobin-runner'))->hourly()."
     },
     "autoload": {

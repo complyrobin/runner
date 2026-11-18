@@ -93,25 +93,28 @@ final readonly class Runner
 
     private function handle(Job $job): bool
     {
-        $this->say("{$job->label()}: rotating.");
+        $this->say($job->isRetire() ? "{$job->label()}: switching off the old keys." : "{$job->label()}: rotating.");
+        $failed = ['run' => $job->run] + ($job->isRetire() ? ['action' => 'retire'] : []) + ['outcome' => 'failed'];
 
         try {
-            $report = $this->rotator->rotate($job);
+            $report = $job->isRetire() ? $this->rotator->retireOldKeys($job) : $this->rotator->rotate($job);
         } catch (StepFailed $failure) {
             $message = Redact::text($failure->getMessage(), 500, $this->secrets);
             $this->say("{$job->label()}: failed at {$failure->step}. {$message}");
-            $this->deliver($job, ['run' => $job->run, 'outcome' => 'failed', 'step' => $failure->step, 'message' => $message]);
+            $this->deliver($job, $failed + ['step' => $failure->step, 'message' => $message]);
 
             return false;
         } catch (Throwable $exception) {
             $message = 'The runner stopped unexpectedly. '.$this->explain($exception);
             $this->say("{$job->label()}: failed. {$message}");
-            $this->deliver($job, ['run' => $job->run, 'outcome' => 'failed', 'step' => 'mint', 'message' => Redact::text($message, 500, $this->secrets)]);
+            $this->deliver($job, $failed + ['step' => $job->isRetire() ? 'retire' : 'mint', 'message' => Redact::text($message, 500, $this->secrets)]);
 
             return false;
         }
 
-        $this->say("{$job->label()}: rotated. ".$this->summary($report));
+        $this->say($job->isRetire()
+            ? "{$job->label()}: switched off {$report['retired_keys']} old key(s)."
+            : "{$job->label()}: rotated. ".$this->summary($report));
 
         return $this->deliver($job, $report);
     }
@@ -176,12 +179,14 @@ final readonly class Runner
      */
     private function essentials(array $report): array
     {
-        return [
+        return array_filter([
             'run' => $report['run'],
             'outcome' => 'succeeded',
             'rotated_at' => $report['rotated_at'],
             'new_key' => ['id' => $report['new_key']['id'], 'expires_at' => $report['new_key']['expires_at'] ?? null],
-        ];
+            'old_keys_expire_at' => $report['old_keys_expire_at'] ?? null,
+            'retire_later' => $report['retire_later'] ?? null,
+        ], static fn (mixed $value): bool => $value !== null);
     }
 
     /**
@@ -196,9 +201,11 @@ final readonly class Runner
             $parts[] = "{$deployments} deployment(s) started.";
         }
 
-        $parts[] = isset($report['old_keys_expire_at'])
-            ? 'Old keys expire at '.$report['old_keys_expire_at'].'.'
-            : 'There were no old keys to retire.';
+        $parts[] = match (true) {
+            isset($report['retire_later']) => 'Old keys keep working until '.$report['old_keys_expire_at'].', then the runner switches them off.',
+            isset($report['old_keys_expire_at']) => 'Old keys expire at '.$report['old_keys_expire_at'].'.',
+            default => 'There were no old keys to retire.',
+        };
 
         return implode(' ', $parts);
     }

@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace ComplyRobin\Runner\Http;
 
 /**
- * One HTTP request. Bodies are JSON; headers may carry a token, so a request is never printed.
+ * One HTTP request. Bodies are JSON, or raw text (such as a form) with its Content-Type in the headers. Headers and
+ * bodies may carry a token, so a request is never printed.
  */
 final readonly class Request
 {
@@ -18,5 +19,6 @@ final readonly class Request
         public string $url,
         public array $headers = [],
         public ?array $json = null,
+        public ?string $body = null,
     ) {}
 }
