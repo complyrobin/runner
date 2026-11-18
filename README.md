@@ -11,7 +11,7 @@ Not every provider can be rotated. **Stripe** secret keys can only be rolled in 
 ## What happens on each run
 
 1. The runner asks ComplyRobin which credentials are due (or which ones someone pressed **Rotate now** on).
-2. It asks the provider for a new key for that credential's own service account or IAM user.
+2. It asks the provider for a new key for that credential's own service account or IAM user. For OpenAI it makes the service account the first time.
 3. It **tries the new key** with one harmless call. A key that doesn't work is deleted again and goes nowhere.
 4. It writes the key into each place you listed. Laravel Cloud and GitHub secrets are sealed so only they can open them.
 5. It redeploys what you asked it to, and **waits until each deployment has finished**. If one fails, it stops here: the old key keeps working and is not retired.
@@ -32,8 +32,8 @@ Give each credential **its own** identity at the provider. The runner retires ev
 
 **OpenAI**
 
-- Create a service account for this credential in the project (Project settings, Service accounts).
 - Create an **admin key** (Organisation settings, Admin keys) with permission to manage API keys. The runner uses it to make and retire the service account's keys.
+- That's all. On a credential's first rotation the runner makes a service account just for it in the project you chose, named after the credential (`ComplyRobin CRD-0042`), and its first key is the new key. Your app's current key isn't touched: delete it in OpenAI once the first rotation has worked. (You can choose a service account of your own instead, as long as nothing else uses it.)
 
 **AWS**
 
@@ -51,7 +51,7 @@ Give each credential **its own** identity at the provider. The runner retires ev
 
 | Place | What the runner needs | Redeploys |
 | --- | --- | --- |
-| Laravel Cloud secret | `LARAVEL_CLOUD_API_TOKEN`: an API token (Organisation settings, API tokens) that can update secrets and start deployments. | Yes |
+| Laravel Cloud secret | `LARAVEL_CLOUD_API_TOKEN`: an API token (Organisation settings, API tokens) that can update secrets and start deployments. The runner finds the secret by its name in the environments you chose, and adds it to an environment that doesn't have it yet. | Yes |
 | GitHub Actions secret | `GH_SECRETS_TOKEN`: a fine-grained token with **Secrets: read and write** on the repository (and **Environments** for an environment secret). | No: workflows read it on their next run. |
 | AWS Secrets Manager | The runner's AWS access, allowed `secretsmanager:PutSecretValue` on the secret. | No: your app reads it the next time it fetches it. |
 | AWS Parameter Store | The runner's AWS access, allowed `ssm:PutParameter` (and `kms:Encrypt` with the key, for a customer-managed key). | No |
@@ -61,12 +61,13 @@ Give each credential **its own** identity at the provider. The runner retires ev
 
 ### 3. In ComplyRobin
 
-- Go to **Credentials, Rotation runners** and press **Add runner**. Copy the token: it is shown only once.
-- On the credential, press **Set up automatic rotation**, choose the provider and fill in its ids, then add each place the key goes.
+- Go to **Credentials, Rotation runners** and press **Make it in GitHub**. ComplyRobin makes a private copy of [complyrobin/runner-template](https://github.com/complyrobin/runner-template) in your GitHub account, with the runner's `COMPLYROBIN_TOKEN` already in its secrets. GitHub asks you to let ComplyRobin manage your repositories for this one job; ComplyRobin hands that access back straight away. (Or press **Add runner** and copy the token yourself: it is shown only once.)
+- Add the tokens for your services to the repository's secrets (step 4). On its first check-in the runner tests them and sends ComplyRobin the names of what they can see: your OpenAI projects, Laravel Cloud apps and environments, GitHub repositories.
+- On the credential, press **Set up automatic rotation** and pick the project and the places the key goes from those lists.
 
 ### 4. In GitHub
 
-Press **Use this template** on [complyrobin/runner-template](https://github.com/complyrobin/runner-template) and make the new repository **private**. Under **Settings, Secrets and variables, Actions**, add `COMPLYROBIN_TOKEN` and the secrets for the services you use (see the table below). Nothing in the workflow needs editing.
+If ComplyRobin didn't make the repository for you, press **Use this template** on [complyrobin/runner-template](https://github.com/complyrobin/runner-template) and make the new repository **private**. Under **Settings, Secrets and variables, Actions**, add `COMPLYROBIN_TOKEN` (unless ComplyRobin put it there) and the secrets for the services you use (see the table below). Nothing in the workflow needs editing.
 
 Or add [`examples/rotate-keys.yml`](examples/rotate-keys.yml) to `.github/workflows/` in a private repository of your own. The heart of it is:
 
@@ -136,6 +137,7 @@ Exit codes: `0` everything due was rotated, `1` a rotation (or a check) failed (
 - The new key exists only in the runner's memory, from the moment the provider makes it until it is written to each place, and is then wiped.
 - Laravel Cloud and GitHub secrets are sealed with libsodium (`crypto_box_seal`) to the service's own public key before they are sent. Every other place receives the key over HTTPS from its own API, with your own token.
 - In GitHub Actions the runner tells GitHub to hide the key in logs (`::add-mask::`) the moment it exists, line by line for a key file.
+- With each test the runner sends ComplyRobin the names and ids its access can see (OpenAI projects and service accounts, Laravel Cloud apps, environments and secret names, GitHub repositories), so you pick from lists instead of copying ids. Never a value: Laravel Cloud doesn't give secret values back, and ComplyRobin drops anything that looks like a key.
 - ComplyRobin is told only a key's id: for AWS a shortened one (`AKIA…WXYZ`), as ComplyRobin keeps nothing shaped like a whole AWS key id.
 - Everything the runner prints or reports passes a filter that removes anything shaped like a key or token. ComplyRobin also refuses any report that looks like it carries one.
 - Requests go over HTTPS only, follow no redirects, and each token is sent only to its own service. Settings that become part of an address (a region, a repository) are checked first, so a setting can't send a token somewhere else.

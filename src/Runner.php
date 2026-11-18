@@ -116,7 +116,7 @@ final readonly class Runner
         }
 
         try {
-            $this->complyRobin->sendCheck($results);
+            $this->complyRobin->sendCheck($results, $this->checker->inventory());
         } catch (Throwable $exception) {
             $this->say('Could not send the test results to ComplyRobin. '.$this->explain($exception));
         }
@@ -217,6 +217,7 @@ final readonly class Runner
             'new_key' => ['id' => $report['new_key']['id'], 'expires_at' => $report['new_key']['expires_at'] ?? null],
             'old_keys_expire_at' => $report['old_keys_expire_at'] ?? null,
             'retire_later' => $report['retire_later'] ?? null,
+            'identity' => $report['identity'] ?? null,
         ], static fn (mixed $value): bool => $value !== null);
     }
 

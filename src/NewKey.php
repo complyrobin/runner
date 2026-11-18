@@ -18,6 +18,7 @@ final class NewKey
      * @param  string|null  $hint  what to show people to recognise the key; the value's last four characters when null
      * @param  array<string, string>  $parts  other parts a destination may ask for, such as key_id; never secret, so kept after forget()
      * @param  list<string>  $sensitive  pieces of the value that must be hidden on their own as well, such as the private key inside a key file
+     * @param  array<string, string>  $identity  ids of something the runner made or found for the credential, such as the OpenAI service account, for ComplyRobin to keep
      */
     public function __construct(
         public readonly string $id,
@@ -26,6 +27,7 @@ final class NewKey
         private ?string $hint = null,
         private array $parts = [],
         private array $sensitive = [],
+        public readonly array $identity = [],
     ) {}
 
     public function value(): string

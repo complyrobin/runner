@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace ComplyRobin\Runner;
 
+use ComplyRobin\Runner\Discovery\Discoverable;
 use ComplyRobin\Runner\Support\Redact;
 use Throwable;
 
 /**
  * Tests the runner's access to each service with one cheap call, without making or changing anything. The results
- * are printed and sent to ComplyRobin, which shows them on the Rotation runners page.
+ * are printed and sent to ComplyRobin, which shows them on the Rotation runners page, with the lists of what the
+ * access can see (projects, apps, environments, repositories) that people pick from when they set up a credential.
  */
 final readonly class Checker
 {
@@ -42,6 +44,31 @@ final readonly class Checker
         }
 
         return $results;
+    }
+
+    /**
+     * What each service's access can see, by list name. A service whose list can't be read is left out: its test
+     * result already says why.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function inventory(): array
+    {
+        $inventory = [];
+
+        foreach ($this->services as $service) {
+            if (! $service instanceof Discoverable) {
+                continue;
+            }
+
+            try {
+                $inventory[$service->inventoryName()] = $service->discover();
+            } catch (Throwable) {
+                continue;
+            }
+        }
+
+        return $inventory;
     }
 
     /**

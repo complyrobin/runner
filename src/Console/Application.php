@@ -96,14 +96,15 @@ final readonly class Application
      */
     private function check(Config $config): int
     {
-        $results = Factory::checker($config, $this->http)->run();
+        $checker = Factory::checker($config, $this->http);
+        $results = $checker->run();
 
         foreach ($results as $result) {
             ($this->output)("{$result['service']}: {$result['message']}");
         }
 
         try {
-            Factory::complyRobin($config, $this->http)->sendCheck($results);
+            Factory::complyRobin($config, $this->http)->sendCheck($results, $checker->inventory());
             ($this->output)('ComplyRobin: the token works, and the results are on the Rotation runners page.');
         } catch (ApiError $error) {
             ($this->output)('ComplyRobin: '.($error->status === 401 ? 'the token was refused. Copy it again from ComplyRobin, or add a new runner there.' : Redact::text($error->getMessage(), 300, $config->secrets())));

@@ -26,8 +26,10 @@ final readonly class OpenAiClient
 
     /**
      * POST /organization/projects/{project}/service_accounts/{service_account}/api_keys
+     *
+     * @param  array<string, string>  $identity  passed on to the key, for ComplyRobin to keep
      */
-    public function createServiceAccountKey(string $projectId, string $serviceAccountId, string $name, ?int $expiresInSeconds): NewKey
+    public function createServiceAccountKey(string $projectId, string $serviceAccountId, string $name, ?int $expiresInSeconds, array $identity = []): NewKey
     {
         $body = ['name' => $name];
 
@@ -41,7 +43,51 @@ final readonly class OpenAiClient
             throw new ApiError('OpenAI', 200, 'The answer had no new key in it.');
         }
 
-        return new NewKey($json['id'], $json['value'], is_int($json['expires_at'] ?? null) ? $json['expires_at'] : null);
+        return new NewKey($json['id'], $json['value'], is_int($json['expires_at'] ?? null) ? $json['expires_at'] : null, identity: $identity);
+    }
+
+    /**
+     * POST /organization/projects/{project}/service_accounts: makes a service account, which comes with its first
+     * key. That key is the new key of the rotation.
+     *
+     * @return array{id: string, key: NewKey}
+     */
+    public function createServiceAccount(string $projectId, string $name, ?int $expiresInSeconds): array
+    {
+        $body = ['name' => $name];
+
+        if ($expiresInSeconds !== null) {
+            $body['expires_in_seconds'] = $expiresInSeconds;
+        }
+
+        $json = $this->expect($this->send('POST', '/organization/projects/'.rawurlencode($projectId).'/service_accounts', $body));
+        $key = is_array($json['api_key'] ?? null) ? $json['api_key'] : [];
+
+        if (! is_string($json['id'] ?? null) || ! is_string($key['id'] ?? null) || ! is_string($key['value'] ?? null) || $key['value'] === '') {
+            throw new ApiError('OpenAI', 200, 'The answer had no new service account key in it.');
+        }
+
+        return ['id' => $json['id'], 'key' => new NewKey($key['id'], $key['value'], is_int($key['expires_at'] ?? null) ? $key['expires_at'] : null, identity: ['service_account_id' => $json['id']])];
+    }
+
+    /**
+     * The organisation's active projects, by id and name (up to 1,000).
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    public function projects(): array
+    {
+        return $this->names('/organization/projects', 10);
+    }
+
+    /**
+     * A project's service accounts, by id and name (up to 500).
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    public function serviceAccounts(string $projectId): array
+    {
+        return $this->names('/organization/projects/'.rawurlencode($projectId).'/service_accounts', 5);
     }
 
     /**
@@ -106,6 +152,36 @@ final readonly class OpenAiClient
     public function check(): void
     {
         $this->expect($this->send('GET', '/organization/projects?limit=1'));
+    }
+
+    /**
+     * The id and name of each item of a list, following its pages.
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    private function names(string $path, int $maxPages): array
+    {
+        $items = [];
+        $after = null;
+
+        for ($page = 0; $page < $maxPages; $page++) {
+            $query = ['limit' => 100] + ($after !== null ? ['after' => $after] : []);
+            $json = $this->expect($this->send('GET', $path.'?'.http_build_query($query)));
+
+            foreach (is_array($json['data'] ?? null) ? $json['data'] : [] as $item) {
+                if (is_array($item) && is_string($item['id'] ?? null)) {
+                    $items[] = ['id' => $item['id'], 'name' => is_string($item['name'] ?? null) && $item['name'] !== '' ? $item['name'] : $item['id']];
+                }
+            }
+
+            if (($json['has_more'] ?? false) !== true || ! is_string($json['last_id'] ?? null)) {
+                break;
+            }
+
+            $after = $json['last_id'];
+        }
+
+        return $items;
     }
 
     /**

@@ -125,6 +125,7 @@ final readonly class Rotator
             'old_keys_expire_at' => $oldKeysExpireAt === null ? null : self::iso($oldKeysExpireAt),
             'retire_later' => $retireLater ? true : null,
             'deployments' => $deployments,
+            'identity' => $key->identity === [] ? null : $key->identity,
         ], static fn (mixed $value): bool => $value !== null);
     }
 
