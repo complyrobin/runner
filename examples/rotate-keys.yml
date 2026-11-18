@@ -1,5 +1,6 @@
 # Copy this file to .github/workflows/rotate-keys.yml in a private repository of yours.
-# Add the four secrets under Settings → Secrets and variables → Actions.
+# Add the secrets you need under Settings → Secrets and variables → Actions.
+# Leave out the providers you don't use.
 name: Rotate keys
 
 on:
@@ -7,7 +8,9 @@ on:
     - cron: "17 * * * *"   # every hour; ComplyRobin decides what is actually due
   workflow_dispatch:       # lets you run it by hand, e.g. after pressing "Rotate now"
 
-permissions: {}            # the runner needs no access to the repository itself
+permissions:
+  id-token: write          # only to sign in to AWS or Google Cloud with OIDC; otherwise use {}
+                           # the runner needs no access to the repository itself
 
 concurrency:
   group: rotate-keys
@@ -18,9 +21,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Only if you rotate AWS keys: sign in with a role, so there is no long-lived AWS key.
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::123456789012:role/complyrobin-runner
+      #     aws-region: us-east-1
+
+      # Only if you rotate Google Cloud keys: sign in with Workload Identity Federation.
+      # - uses: google-github-actions/auth@v2
+      #   id: google
+      #   with:
+      #     workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+      #     service_account: complyrobin-runner@your-project.iam.gserviceaccount.com
+      #     token_format: access_token
+
       - uses: complyrobin/runner@v0
         with:
           organisation: your-organisation
           runner-token: ${{ secrets.COMPLYROBIN_RUNNER_TOKEN }}
           openai-admin-key: ${{ secrets.OPENAI_ADMIN_KEY }}
+          # google-cloud-access-token: ${{ steps.google.outputs.access_token }}
           laravel-cloud-token: ${{ secrets.LARAVEL_CLOUD_API_TOKEN }}

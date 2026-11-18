@@ -23,12 +23,16 @@ final readonly class Application
 
         Usage:
           complyrobin-runner [run]   Check in with ComplyRobin and rotate every key that is due.
-          complyrobin-runner check   Check the settings and that OpenAI and Laravel Cloud accept the tokens. Rotates nothing.
+          complyrobin-runner check   Check the settings and that each service accepts the runner's access. Rotates nothing.
 
-        Settings (environment variables):
+        Settings (environment variables). Set only the providers you use:
           COMPLYROBIN_RUNNER_TOKEN   The runner token ComplyRobin showed you once (crr_…).
           COMPLYROBIN_ORGANISATION   Your organisation's address name in ComplyRobin.
           OPENAI_ADMIN_KEY           An OpenAI admin key, to make and retire service account keys.
+          AWS_ACCESS_KEY_ID          AWS access that can manage the IAM users' access keys (with
+          AWS_SECRET_ACCESS_KEY      AWS_SESSION_TOKEN when it is short-lived, as from GitHub's OIDC sign-in).
+          GOOGLE_CLOUD_ACCESS_TOKEN  A Google Cloud access token that can manage service account keys, or
+          GOOGLE_CLOUD_CREDENTIALS   the key file (JSON) of a service account that can.
           LARAVEL_CLOUD_API_TOKEN    A Laravel Cloud API token, to update secrets and redeploy.
           COMPLYROBIN_API_URL        Optional. Defaults to https://api.complyrobin.com/v1.
         TXT;
@@ -79,19 +83,25 @@ final readonly class Application
 
     private function check(Config $config): int
     {
-        [$openAi, $laravelCloud] = Factory::vendors($config, $this->http);
+        $sources = Factory::sources($config, $this->http);
+        $services = [
+            'OpenAI' => $sources['openai'] ?? null,
+            'AWS' => $sources['aws'] ?? null,
+            'Google Cloud' => $sources['google_cloud'] ?? null,
+            'Laravel Cloud' => Factory::laravelCloud($config, $this->http),
+        ];
         $healthy = true;
 
-        foreach (['OpenAI' => $openAi, 'Laravel Cloud' => $laravelCloud] as $service => $client) {
+        foreach ($services as $service => $client) {
             if ($client === null) {
-                ($this->output)("{$service}: no token set, so this runner can't use it.");
+                ($this->output)("{$service}: no access set, so this runner can't use it.");
 
                 continue;
             }
 
             try {
                 $client->check();
-                ($this->output)("{$service}: the token works.");
+                ($this->output)("{$service}: the access works.");
             } catch (Throwable $exception) {
                 $healthy = false;
                 ($this->output)("{$service}: ".Redact::text($exception->getMessage(), 300, $config->secrets()));

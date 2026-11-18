@@ -31,7 +31,9 @@ final class ApplicationTest extends TestCase
 
         $this->assertSame(1, $this->app(self::ENV, $http)->run(['check']));
         $this->assertSame([
-            'OpenAI: the token works.',
+            'OpenAI: the access works.',
+            'AWS: no access set, so this runner can\'t use it.',
+            'Google Cloud: no access set, so this runner can\'t use it.',
             'Laravel Cloud: Laravel Cloud answered 401. Unauthenticated.',
             'ComplyRobin: will check in at https://api.complyrobin.com/v1 for acme. The token is checked on the first run.',
         ], $this->output);

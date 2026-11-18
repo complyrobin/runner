@@ -9,6 +9,7 @@ use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 use ComplyRobin\Runner\LaravelCloud\LaravelCloudClient;
 use ComplyRobin\Runner\OpenAi\OpenAiClient;
+use ComplyRobin\Runner\OpenAi\OpenAiSource;
 use ComplyRobin\Runner\Rotator;
 use ComplyRobin\Runner\Runner;
 use ComplyRobin\Runner\Tests\Fakes\FakeHttpClient;
@@ -199,6 +200,17 @@ final class RunnerTest extends TestCase
     }
 
     #[Test]
+    public function it_says_which_access_is_missing_for_a_provider_it_knows(): void
+    {
+        $this->http = $this->withFirstClaim($this->job(['source' => ['type' => 'aws', 'user_name' => 'complyrobin-crd-0042']]));
+
+        $this->runner()->run();
+
+        $this->assertSame('mint', $this->reports()[0]['step']);
+        $this->assertStringStartsWith('The runner has no AWS access. Set AWS_ACCESS_KEY_ID', $this->reports()[0]['message']);
+    }
+
+    #[Test]
     public function it_leaves_an_old_key_alone_that_already_expires_sooner(): void
     {
         $soon = (new DateTimeImmutable('2026-11-17T12:00:00Z'))->getTimestamp();
@@ -243,7 +255,7 @@ final class RunnerTest extends TestCase
         $this->http = $this->replace('POST /runner/acme/reports', FakeHttpClient::json(['message' => 'Invalid.', 'errors' => ['deployments.0' => ['Looks like a key.']]], 422), FakeHttpClient::json(['recorded' => true]));
 
         $this->assertSame(Runner::OK, $this->runner()->run());
-        $this->assertSame(['run', 'outcome', 'rotated_at', 'new_key'], array_keys($this->reports()[1]));
+        $this->assertSame(['run', 'outcome', 'rotated_at', 'new_key', 'old_keys_expire_at'], array_keys($this->reports()[1]));
     }
 
     #[Test]
@@ -281,7 +293,7 @@ final class RunnerTest extends TestCase
 
         return new Runner(
             new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'acme', self::RUNNER_TOKEN),
-            new Rotator(new OpenAiClient($this->http, 'sk-admin-test'), new LaravelCloudClient($this->http, 'lc-token'), $clock, $mask),
+            new Rotator(['openai' => new OpenAiSource(new OpenAiClient($this->http, 'sk-admin-test'))], new LaravelCloudClient($this->http, 'lc-token'), $clock, $mask),
             [self::RUNNER_TOKEN],
             function (string $line): void {
                 $this->output[] = $line;

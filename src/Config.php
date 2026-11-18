@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ComplyRobin\Runner;
 
+use ComplyRobin\Runner\Aws\AwsCredentials;
 use ComplyRobin\Runner\Exceptions\ConfigurationError;
 
 /**
@@ -20,6 +21,9 @@ final readonly class Config
         private ?string $openAiAdminKey,
         private ?string $laravelCloudToken,
         public bool $inGitHubActions = false,
+        private ?AwsCredentials $aws = null,
+        private ?string $googleCloudAccessToken = null,
+        private ?string $googleCloudCredentials = null,
     ) {}
 
     /**
@@ -50,6 +54,13 @@ final readonly class Config
             throw new ConfigurationError('COMPLYROBIN_API_URL is not a web address.');
         }
 
+        $awsKeyId = $value('AWS_ACCESS_KEY_ID');
+        $awsSecret = $value('AWS_SECRET_ACCESS_KEY');
+
+        if (($awsKeyId === null) !== ($awsSecret === null)) {
+            throw new ConfigurationError('Set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither.');
+        }
+
         return new self(
             apiUrl: $apiUrl,
             organisation: $organisation,
@@ -57,6 +68,9 @@ final readonly class Config
             openAiAdminKey: $value('OPENAI_ADMIN_KEY'),
             laravelCloudToken: $value('LARAVEL_CLOUD_API_TOKEN'),
             inGitHubActions: $value('GITHUB_ACTIONS') === 'true',
+            aws: $awsKeyId !== null && $awsSecret !== null ? new AwsCredentials($awsKeyId, $awsSecret, $value('AWS_SESSION_TOKEN')) : null,
+            googleCloudAccessToken: $value('GOOGLE_CLOUD_ACCESS_TOKEN'),
+            googleCloudCredentials: $value('GOOGLE_CLOUD_CREDENTIALS'),
         );
     }
 
@@ -75,12 +89,40 @@ final readonly class Config
         return $this->laravelCloudToken;
     }
 
+    public function aws(): ?AwsCredentials
+    {
+        return $this->aws;
+    }
+
+    public function googleCloudAccessToken(): ?string
+    {
+        return $this->googleCloudAccessToken;
+    }
+
+    public function googleCloudCredentials(): ?string
+    {
+        return $this->googleCloudCredentials;
+    }
+
     /**
+     * Every token the runner holds, to keep out of all output.
+     *
      * @return list<string>
      */
     public function secrets(): array
     {
-        return array_values(array_filter([$this->runnerToken, $this->openAiAdminKey, $this->laravelCloudToken], is_string(...)));
+        $googlePrivateKey = json_decode((string) $this->googleCloudCredentials, true)['private_key'] ?? null;
+
+        return array_values(array_filter([
+            $this->runnerToken,
+            $this->openAiAdminKey,
+            $this->laravelCloudToken,
+            $this->aws?->secretAccessKey,
+            $this->aws?->sessionToken,
+            $this->googleCloudAccessToken,
+            $this->googleCloudCredentials,
+            is_string($googlePrivateKey) ? $googlePrivateKey : null,
+        ], is_string(...)));
     }
 
     public function __debugInfo(): array

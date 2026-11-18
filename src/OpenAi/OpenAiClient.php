@@ -8,6 +8,7 @@ use ComplyRobin\Runner\Exceptions\ApiError;
 use ComplyRobin\Runner\Http\HttpClient;
 use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
+use ComplyRobin\Runner\NewKey;
 
 /**
  * The OpenAI Admin API calls the runner needs, with an admin key from the customer's own organisation:

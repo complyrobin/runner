@@ -21,7 +21,14 @@ final class CurlHttpClient implements HttpClient
     {
         $this->guardScheme($request->url);
 
-        $headers = ['Accept: application/json', 'User-Agent: complyrobin-runner/'.Runner::VERSION];
+        $names = array_map(strtolower(...), array_keys($request->headers));
+        $headers = [];
+
+        foreach (['Accept' => 'application/json', 'User-Agent' => 'complyrobin-runner/'.Runner::VERSION] as $name => $value) {
+            if (! in_array(strtolower($name), $names, true)) {
+                $headers[] = $name.': '.$value;
+            }
+        }
 
         foreach ($request->headers as $name => $value) {
             $headers[] = $name.': '.$value;
@@ -52,6 +59,8 @@ final class CurlHttpClient implements HttpClient
         if ($request->json !== null) {
             $options[CURLOPT_POSTFIELDS] = json_encode($request->json, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
             $options[CURLOPT_HTTPHEADER][] = 'Content-Type: application/json';
+        } elseif ($request->body !== null) {
+            $options[CURLOPT_POSTFIELDS] = $request->body;
         } elseif (in_array($request->method, ['POST', 'PATCH', 'PUT'], true)) {
             $options[CURLOPT_POSTFIELDS] = '';
         }
