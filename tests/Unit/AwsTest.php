@@ -100,7 +100,7 @@ final class AwsTest extends TestCase
 
         $this->assertSame(self::NEW_ID, $this->opened('sec-id'));
         $this->assertSame(self::NEW_SECRET, $this->opened('sec-secret'));
-        $this->assertSame('Active', $this->status('AKIAOLDKEY0000000009'), 'The old key keeps working through the grace period.');
+        $this->assertSame('Active', $this->keyStatus('AKIAOLDKEY0000000009'), 'The old key keeps working through the grace period.');
         $this->assertStringContainsString('Old keys keep working until 2026-11-19T10:00:00Z, then the runner switches them off.', implode("\n", $this->output));
     }
 
@@ -124,8 +124,8 @@ final class AwsTest extends TestCase
 
         $this->assertSame(Runner::OK, $this->runner()->run());
 
-        $this->assertNull($this->status('AKIAOLDERKEY00000008'));
-        $this->assertSame('Active', $this->status(self::NEW_ID));
+        $this->assertNull($this->keyStatus('AKIAOLDERKEY00000008'));
+        $this->assertSame('Active', $this->keyStatus(self::NEW_ID));
     }
 
     #[Test]
@@ -148,8 +148,8 @@ final class AwsTest extends TestCase
         $this->assertSame(Runner::ROTATION_FAILED, $this->runner()->run());
 
         $this->assertSame('push', $this->reports()[0]['step']);
-        $this->assertNull($this->status(self::NEW_ID));
-        $this->assertSame('Active', $this->status('AKIAOLDKEY0000000009'));
+        $this->assertNull($this->keyStatus(self::NEW_ID));
+        $this->assertSame('Active', $this->keyStatus('AKIAOLDKEY0000000009'));
     }
 
     #[Test]
@@ -160,8 +160,8 @@ final class AwsTest extends TestCase
 
         $this->assertSame(Runner::OK, $this->runner()->run());
 
-        $this->assertSame('Inactive', $this->status('AKIAOLDKEY0000000009'));
-        $this->assertSame('Active', $this->status(self::NEW_ID));
+        $this->assertSame('Inactive', $this->keyStatus('AKIAOLDKEY0000000009'));
+        $this->assertSame('Active', $this->keyStatus(self::NEW_ID));
         $this->assertSame(['run' => self::RUN, 'action' => 'retire', 'outcome' => 'retired', 'retired_keys' => 1], $this->reports()[0]);
         $this->assertSame([], $this->http->sentTo('PATCH', '/secrets/'));
     }
@@ -174,7 +174,7 @@ final class AwsTest extends TestCase
 
         $this->assertSame(Runner::ROTATION_FAILED, $this->runner()->run());
 
-        $this->assertSame('Active', $this->status('AKIAOLDKEY0000000009'));
+        $this->assertSame('Active', $this->keyStatus('AKIAOLDKEY0000000009'));
         $report = $this->reports()[0];
         $this->assertSame(['run', 'action', 'outcome', 'step', 'message'], array_keys($report));
         $this->assertSame('retire', $report['step']);
@@ -246,7 +246,7 @@ final class AwsTest extends TestCase
         return new Response(400, '<ErrorResponse><Error><Code>InvalidAction</Code><Message>Unknown.</Message></Error></ErrorResponse>');
     }
 
-    private function status(string $id): ?string
+    private function keyStatus(string $id): ?string
     {
         foreach ($this->keys as $key) {
             if ($key['id'] === $id) {
