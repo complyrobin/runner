@@ -42,6 +42,32 @@ final class GitHubClient
     }
 
     /**
+     * The repositories the token can see, as owner/name (up to 300).
+     *
+     * @return list<string>
+     */
+    public function repositories(): array
+    {
+        $repositories = [];
+
+        for ($page = 1; $page <= 3; $page++) {
+            $json = $this->expect($this->send('GET', '/user/repos?'.http_build_query(['per_page' => 100, 'page' => $page, 'sort' => 'full_name'])));
+
+            foreach ($json as $repository) {
+                if (is_array($repository) && is_string($repository['full_name'] ?? null)) {
+                    $repositories[] = $repository['full_name'];
+                }
+            }
+
+            if (count($json) < 100) {
+                break;
+            }
+        }
+
+        return $repositories;
+    }
+
+    /**
      * GET /rate_limit: answers any valid token, whatever it may do.
      */
     public function check(): void

@@ -293,12 +293,95 @@ final class RunnerTest extends TestCase
     public function it_tests_its_access_when_someone_pressed_test_in_complyrobin(): void
     {
         $this->http = $this->replace('POST /runner/claims', FakeHttpClient::json(['jobs' => [], 'check_requested' => true]));
-        $this->http->on('GET /organization/projects', FakeHttpClient::json(['data' => []]))
+        $this->http->on('GET /organization/projects/proj_abc/service_accounts', FakeHttpClient::json(['data' => [['id' => 'svc_acct_abc', 'name' => 'ComplyRobin CRD-0042']], 'has_more' => false]))
+            ->on('GET /organization/projects', FakeHttpClient::json(['data' => [['id' => 'proj_abc', 'name' => 'Project A']], 'has_more' => false]))
             ->on('POST /runner/checks', FakeHttpClient::json(['recorded' => true]));
 
         $this->assertSame(Runner::OK, $this->runner()->run());
 
-        $this->assertSame(['services' => [['service' => 'OpenAI', 'status' => 'ok', 'message' => 'The access works.']]], $this->http->sentTo('POST', '/runner/checks')[0]->json);
+        $this->assertSame([
+            'services' => [['service' => 'OpenAI', 'status' => 'ok', 'message' => 'The access works.']],
+            'inventory' => ['openai' => ['projects' => [
+                ['id' => 'proj_abc', 'name' => 'Project A', 'service_accounts' => [['id' => 'svc_acct_abc', 'name' => 'ComplyRobin CRD-0042']]],
+            ]]],
+        ], $this->http->sentTo('POST', '/runner/checks')[0]->json);
+    }
+
+    #[Test]
+    public function it_makes_a_service_account_for_the_credential_when_there_is_none_yet(): void
+    {
+        $this->withFirstClaim($this->job(['source' => ['service_account_id' => null, 'service_account_name' => 'ComplyRobin CRD-0042']]));
+        $this->http
+            ->on('GET /projects/proj_abc/service_accounts', FakeHttpClient::json(['data' => [], 'has_more' => false]), FakeHttpClient::json(['data' => [['id' => 'svc_new', 'name' => 'ComplyRobin CRD-0042']], 'has_more' => false]))
+            ->on('POST /projects/proj_abc/service_accounts', FakeHttpClient::json([
+                'object' => 'organization.project.service_account',
+                'id' => 'svc_new',
+                'name' => 'ComplyRobin CRD-0042',
+                'role' => 'member',
+                'created_at' => 1_763_373_600,
+                'api_key' => ['object' => 'organization.project.service_account.api_key', 'id' => 'key_first', 'name' => 'Secret Key', 'value' => $this->newKey, 'created_at' => 1_763_373_600],
+            ]));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+
+        $this->assertSame(['name' => 'ComplyRobin CRD-0042'], $this->http->sentTo('POST', '/projects/proj_abc/service_accounts')[0]->json);
+        $this->assertSame([], $this->http->sentTo('POST', '/api_keys'));
+        $report = $this->reports()[0];
+        $this->assertSame('key_first', $report['new_key']['id']);
+        $this->assertSame(['service_account_id' => 'svc_new'], $report['identity']);
+        $this->assertArrayNotHasKey('old_keys_expire_at', $report);
+    }
+
+    #[Test]
+    public function it_uses_the_projects_service_account_of_that_name_once_it_exists(): void
+    {
+        $this->withFirstClaim($this->job(['source' => ['service_account_id' => null, 'service_account_name' => 'ComplyRobin CRD-0042']]));
+        $this->http->on('GET /projects/proj_abc/service_accounts', FakeHttpClient::json(['data' => [['id' => 'svc_acct_abc', 'name' => 'ComplyRobin CRD-0042']], 'has_more' => false]));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+
+        $this->assertCount(1, $this->http->sentTo('POST', '/projects/proj_abc/service_accounts'));
+        $this->assertStringEndsWith('/service_accounts/svc_acct_abc/api_keys', $this->http->sentTo('POST', '/projects/proj_abc/service_accounts')[0]->url);
+        $this->assertSame(['service_account_id' => 'svc_acct_abc'], $this->reports()[0]['identity']);
+        $this->assertStringEndsWith('/api_keys/key_old', $this->http->sentTo('POST', '/projects/proj_abc/api_keys/')[0]->url);
+    }
+
+    #[Test]
+    public function it_finds_the_laravel_cloud_secret_by_its_name_in_the_environment(): void
+    {
+        $this->withFirstClaim($this->job(['destinations' => [['type' => 'laravel_cloud', 'secret_name' => 'OPENAI_API_KEY', 'environment_ids' => ['env-1'], 'redeploy' => true]]]));
+        $this->http->on('GET /environments/env-1', FakeHttpClient::json([
+            'data' => ['id' => 'env-1', 'attributes' => ['name' => 'production'], 'relationships' => ['secrets' => ['data' => [['type' => 'secrets', 'id' => 'sec-1'], ['type' => 'secrets', 'id' => 'sec-2']]]]],
+            'included' => [
+                ['type' => 'secrets', 'id' => 'sec-1', 'attributes' => ['key' => 'OPENAI_API_KEY']],
+                ['type' => 'secrets', 'id' => 'sec-2', 'attributes' => ['key' => 'STRIPE_SECRET']],
+            ],
+        ]));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+
+        $this->assertCount(1, $this->http->sentTo('PATCH', '/secrets/sec-1'));
+        $this->assertSame([], $this->http->sentTo('POST', '/api/secrets'));
+    }
+
+    #[Test]
+    public function it_makes_the_laravel_cloud_secret_and_attaches_it_when_the_environment_has_none(): void
+    {
+        $this->withFirstClaim($this->job(['destinations' => [['type' => 'laravel_cloud', 'secret_name' => 'OPENAI_API_KEY', 'environment_ids' => ['env-1'], 'redeploy' => true]]]));
+        $this->http
+            ->on('GET /environments/env-1', FakeHttpClient::json(['data' => ['id' => 'env-1', 'attributes' => ['name' => 'production'], 'relationships' => ['secrets' => ['data' => []]]]]))
+            ->on('POST /environments/env-1/secrets', FakeHttpClient::json(['data' => ['id' => 'env-1']]))
+            ->on('POST /api/secrets', FakeHttpClient::json(['data' => ['id' => 'sec-9', 'attributes' => ['key' => 'OPENAI_API_KEY']]], 201));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+
+        $created = $this->http->sentTo('POST', '/api/secrets');
+        $this->assertCount(1, $created);
+        $this->assertSame('OPENAI_API_KEY', $created[0]->json['key']);
+        $this->assertSame($this->newKey, sodium_crypto_box_seal_open(base64_decode($created[0]->json['value'], true), $this->secretKey));
+        $this->assertSame(['secrets' => ['sec-9']], $this->http->sentTo('POST', '/environments/env-1/secrets')[0]->json);
+        $this->assertSame([], $this->http->sentTo('PATCH', '/secrets/'));
+        $this->assertCount(1, $this->http->sentTo('POST', '/environments/env-1/deployments'));
     }
 
     #[Test]

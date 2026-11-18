@@ -7,6 +7,7 @@ namespace ComplyRobin\Runner\GitHub;
 use ComplyRobin\Runner\Destinations\DeploymentState;
 use ComplyRobin\Runner\Destinations\KeyDestination;
 use ComplyRobin\Runner\Destinations\Settings;
+use ComplyRobin\Runner\Discovery\Discoverable;
 use LogicException;
 
 /**
@@ -14,7 +15,7 @@ use LogicException;
  * environment (optional) and secret_name. The value is sealed to the repository's public key. Workflows read the new
  * value on their next run, so there is nothing to redeploy.
  */
-final readonly class GitHubDestination implements KeyDestination
+final readonly class GitHubDestination implements Discoverable, KeyDestination
 {
     public const string REPOSITORY = '/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/';
 
@@ -60,5 +61,20 @@ final readonly class GitHubDestination implements KeyDestination
     public function check(): void
     {
         $this->client->check();
+    }
+
+    public function inventoryName(): string
+    {
+        return 'github';
+    }
+
+    /**
+     * The repositories the token can see.
+     *
+     * @return array{repositories: list<string>}
+     */
+    public function discover(): array
+    {
+        return ['repositories' => $this->client->repositories()];
     }
 }

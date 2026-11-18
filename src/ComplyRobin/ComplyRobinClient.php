@@ -52,15 +52,17 @@ final readonly class ComplyRobinClient
     }
 
     /**
-     * Sends the results of a test of the runner's access, which ComplyRobin shows on the Rotation runners page.
+     * Sends the results of a test of the runner's access, which ComplyRobin shows on the Rotation runners page, and
+     * the lists people pick from when they set up a credential.
      *
      * @param  list<array{service: string, status: string, message: string}>  $results
+     * @param  array<string, array<string, mixed>>  $inventory  what each service's access can see: names and ids only
      *
      * @throws ApiError
      */
-    public function sendCheck(array $results): void
+    public function sendCheck(array $results, array $inventory = []): void
     {
-        $response = $this->post('checks', ['services' => $results]);
+        $response = $this->post('checks', ['services' => $results] + ($inventory === [] ? [] : ['inventory' => $inventory]));
 
         if (! $response->successful()) {
             throw ApiError::from('ComplyRobin', $response);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ComplyRobin\Runner\Tests\Unit;
 
 use ComplyRobin\Runner\Aws\AwsCredentials;
+use ComplyRobin\Runner\Checker;
 use ComplyRobin\Runner\Aws\AwsJsonClient;
 use ComplyRobin\Runner\Aws\IamClient;
 use ComplyRobin\Runner\Aws\ParameterStoreDestination;
@@ -18,6 +19,8 @@ use ComplyRobin\Runner\GoogleCloud\GoogleCloudClient;
 use ComplyRobin\Runner\GoogleCloud\SecretManagerDestination;
 use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Laravel\LaravelSettings;
+use ComplyRobin\Runner\LaravelCloud\LaravelCloudClient;
+use ComplyRobin\Runner\LaravelCloud\LaravelCloudDestination;
 use ComplyRobin\Runner\Tests\Fakes\FakeHttpClient;
 use ComplyRobin\Runner\Vercel\VercelClient;
 use ComplyRobin\Runner\Vercel\VercelDestination;
@@ -29,6 +32,41 @@ use PHPUnit\Framework\TestCase;
 final class DestinationsTest extends TestCase
 {
     private const string KEY = 'sk-svcacct-Ab3xYz9QAb3xYz9QAb3xYz9QWXYZ';
+
+    #[Test]
+    public function it_lists_laravel_cloud_apps_environments_and_secret_names_and_github_repositories(): void
+    {
+        $http = (new FakeHttpClient)
+            ->on('GET /api/applications/app-1/environments', FakeHttpClient::json([
+                'data' => [['id' => 'env-1', 'type' => 'environments', 'attributes' => ['name' => 'production'], 'relationships' => ['secrets' => ['data' => [['type' => 'secrets', 'id' => 'sec-1']]]]]],
+                'included' => [['type' => 'secrets', 'id' => 'sec-1', 'attributes' => ['key' => 'OPENAI_API_KEY', 'value' => 'never sent by Cloud']]],
+            ]))
+            ->on('GET /api/applications/app-2/environments', FakeHttpClient::json(['data' => []]))
+            ->on('GET /api/applications', FakeHttpClient::json(['data' => [['id' => 'app-1', 'attributes' => ['name' => 'Project A']]], 'links' => ['next' => 'https://cloud.laravel.com/api/applications?page=2']]), FakeHttpClient::json(['data' => [['id' => 'app-2', 'attributes' => ['name' => 'Project B']]], 'links' => ['next' => null]]))
+            ->on('GET /user/repos', FakeHttpClient::json([['full_name' => 'acme/api'], ['full_name' => 'acme/web']]));
+
+        $inventory = (new Checker([
+            'Laravel Cloud' => new LaravelCloudDestination(new LaravelCloudClient($http, 'cloud-token')),
+            'GitHub' => new GitHubDestination(new GitHubClient($http, 'github_pat_x')),
+        ]))->inventory();
+
+        $this->assertSame([
+            'laravel_cloud' => ['applications' => [
+                ['id' => 'app-1', 'name' => 'Project A', 'environments' => [['id' => 'env-1', 'name' => 'production', 'secrets' => [['id' => 'sec-1', 'name' => 'OPENAI_API_KEY']]]]],
+                ['id' => 'app-2', 'name' => 'Project B', 'environments' => []],
+            ]],
+            'github' => ['repositories' => ['acme/api', 'acme/web']],
+        ], $inventory);
+        $this->assertStringEndsWith('/api/applications?page=2', $http->sentTo('GET', '/api/applications?')[0]->url);
+    }
+
+    #[Test]
+    public function it_leaves_out_a_list_it_could_not_read(): void
+    {
+        $http = (new FakeHttpClient)->on('GET /user/repos', FakeHttpClient::json(['message' => 'Bad credentials'], 401));
+
+        $this->assertSame([], (new Checker(['GitHub' => new GitHubDestination(new GitHubClient($http, 'github_pat_x')), 'Vercel' => null]))->inventory());
+    }
 
     #[Test]
     public function it_seals_a_github_secret_to_the_repositorys_public_key(): void

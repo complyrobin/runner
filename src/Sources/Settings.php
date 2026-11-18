@@ -26,4 +26,14 @@ final class Settings
 
         return trim($value);
     }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    public static function optional(array $settings, string $name): ?string
+    {
+        $value = $settings[$name] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
 }
