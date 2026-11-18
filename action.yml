@@ -1,5 +1,5 @@
 name: ComplyRobin rotation runner
-description: Rotates API keys that are due in your own OpenAI, AWS and Google Cloud accounts, puts them in Laravel Cloud, and reports the evidence to ComplyRobin. Keys never leave your GitHub account.
+description: Rotates the API keys ComplyRobin says are due, in your own accounts, and reports the evidence back. Keys never leave your GitHub account.
 author: ComplyRobin
 branding:
   icon: refresh-cw
@@ -7,14 +7,11 @@ branding:
 
 inputs:
   command:
-    description: "run (rotate what is due) or check (test the tokens, rotate nothing)."
+    description: "run (rotate what is due) or check (test the access, send the results to ComplyRobin, rotate nothing)."
     required: false
     default: run
-  organisation:
-    description: Your organisation's address name in ComplyRobin.
-    required: true
-  runner-token:
-    description: The runner token ComplyRobin showed you once. Store it as a repository secret.
+  token:
+    description: The runner token ComplyRobin showed you once (crr_…). Store it as a repository secret called COMPLYROBIN_TOKEN.
     required: true
   openai-admin-key:
     description: An OpenAI admin key, to make and retire service account keys. Store it as a repository secret.
@@ -30,6 +27,18 @@ inputs:
     default: ""
   laravel-cloud-token:
     description: A Laravel Cloud API token, to update secrets and redeploy. Store it as a repository secret.
+    required: false
+    default: ""
+  github-secrets-token:
+    description: A GitHub token that can write the Actions secrets of the repositories the new keys go to. Store it as a repository secret.
+    required: false
+    default: ""
+  forge-token:
+    description: A Laravel Forge API token, to update a site's environment and deploy. Store it as a repository secret.
+    required: false
+    default: ""
+  vercel-token:
+    description: A Vercel token, to update environment variables and redeploy. Store it as a repository secret.
     required: false
     default: ""
   api-url:
@@ -53,12 +62,14 @@ runs:
 
     - shell: bash
       env:
-        COMPLYROBIN_ORGANISATION: ${{ inputs.organisation }}
-        COMPLYROBIN_RUNNER_TOKEN: ${{ inputs.runner-token }}
+        COMPLYROBIN_TOKEN: ${{ inputs.token }}
         OPENAI_ADMIN_KEY: ${{ inputs.openai-admin-key }}
         GOOGLE_CLOUD_ACCESS_TOKEN: ${{ inputs.google-cloud-access-token }}
         GOOGLE_CLOUD_CREDENTIALS: ${{ inputs.google-cloud-credentials }}
         LARAVEL_CLOUD_API_TOKEN: ${{ inputs.laravel-cloud-token }}
+        GH_SECRETS_TOKEN: ${{ inputs.github-secrets-token }}
+        FORGE_API_TOKEN: ${{ inputs.forge-token }}
+        VERCEL_TOKEN: ${{ inputs.vercel-token }}
         COMPLYROBIN_API_URL: ${{ inputs.api-url }}
         RUNNER_COMMAND: ${{ inputs.command }}
       run: php "$GITHUB_ACTION_PATH/bin/complyrobin-runner" "$RUNNER_COMMAND"

@@ -91,6 +91,14 @@ final readonly class IamClient
     }
 
     /**
+     * STS GetCallerIdentity signed with a new access key itself: proves AWS accepts it.
+     */
+    public function verifyKey(string $accessKeyId, string $secretAccessKey): void
+    {
+        (new self($this->http, new AwsCredentials($accessKeyId, $secretAccessKey), $this->clock, $this->iamUrl, $this->stsUrl))->check();
+    }
+
+    /**
      * STS GetCallerIdentity: works with any valid AWS access and needs no permission.
      */
     public function check(): void

@@ -31,6 +31,11 @@ final readonly class OpenAiSource implements KeySource
         );
     }
 
+    public function verify(array $settings, NewKey $key): void
+    {
+        $this->client->verifyKey($key->value());
+    }
+
     public function discard(array $settings, NewKey $key): void
     {
         $this->client->deleteKey(Settings::required($settings, 'project_id'), $key->id);

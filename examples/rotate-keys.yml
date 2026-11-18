@@ -1,16 +1,23 @@
-# Copy this file to .github/workflows/rotate-keys.yml in a private repository of yours.
-# Add the secrets you need under Settings → Secrets and variables → Actions.
-# Leave out the providers you don't use.
+# The ComplyRobin rotation runner, every hour. Keep this file at .github/workflows/rotate-keys.yml in a private
+# repository of yours (the quickest way: "Use this template" on github.com/complyrobin/runner-template).
+#
+# Add your secrets under Settings → Secrets and variables → Actions. Only COMPLYROBIN_TOKEN is always needed; add the
+# others for the services you use and leave the rest out. Nothing here needs editing.
 name: Rotate keys
 
 on:
   schedule:
     - cron: "17 * * * *"   # every hour; ComplyRobin decides what is actually due
-  workflow_dispatch:       # lets you run it by hand, e.g. after pressing "Rotate now"
+  workflow_dispatch:       # run it by hand, e.g. to test it or after pressing "Rotate now"
+    inputs:
+      command:
+        description: "run rotates what is due; check tests the access and rotates nothing"
+        type: choice
+        options: [run, check]
+        default: run
 
 permissions:
-  id-token: write          # only to sign in to AWS or Google Cloud with OIDC; otherwise use {}
-                           # the runner needs no access to the repository itself
+  id-token: write          # only to sign in to AWS or Google Cloud without a stored key (see below)
 
 concurrency:
   group: rotate-keys
@@ -19,15 +26,17 @@ concurrency:
 jobs:
   rotate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90    # the runner waits for your app's redeploys to finish before retiring the old key
     steps:
-      # Only if you rotate AWS keys: sign in with a role, so there is no long-lived AWS key.
+      # Rotating AWS keys, or writing to AWS secrets? Remove the # signs below to sign in with a role, so there is no
+      # long-lived AWS key. (Or add AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets and pass them as env instead.)
       # - uses: aws-actions/configure-aws-credentials@v4
       #   with:
       #     role-to-assume: arn:aws:iam::123456789012:role/complyrobin-runner
       #     aws-region: us-east-1
 
-      # Only if you rotate Google Cloud keys: sign in with Workload Identity Federation.
+      # Rotating Google Cloud keys, or writing to Google secrets, without a key file? Remove the # signs below, and
+      # pass steps.google.outputs.access_token as google-cloud-access-token.
       # - uses: google-github-actions/auth@v2
       #   id: google
       #   with:
@@ -37,8 +46,11 @@ jobs:
 
       - uses: complyrobin/runner@v0
         with:
-          organisation: your-organisation
-          runner-token: ${{ secrets.COMPLYROBIN_RUNNER_TOKEN }}
+          command: ${{ inputs.command || 'run' }}
+          token: ${{ secrets.COMPLYROBIN_TOKEN }}
           openai-admin-key: ${{ secrets.OPENAI_ADMIN_KEY }}
-          # google-cloud-access-token: ${{ steps.google.outputs.access_token }}
+          google-cloud-credentials: ${{ secrets.GOOGLE_CLOUD_CREDENTIALS }}
           laravel-cloud-token: ${{ secrets.LARAVEL_CLOUD_API_TOKEN }}
+          github-secrets-token: ${{ secrets.GH_SECRETS_TOKEN }}
+          forge-token: ${{ secrets.FORGE_API_TOKEN }}
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}

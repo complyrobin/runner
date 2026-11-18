@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ComplyRobin\Runner\LaravelCloud;
 
+use ComplyRobin\Runner\Destinations\DeploymentState;
 use ComplyRobin\Runner\Exceptions\ApiError;
 use ComplyRobin\Runner\Http\HttpClient;
 use ComplyRobin\Runner\Http\Request;
@@ -11,7 +12,7 @@ use ComplyRobin\Runner\Http\Response;
 
 /**
  * The Laravel Cloud API calls the runner needs, with the customer's own API token: the organisation's sealing key,
- * updating a secret with a sealed value, and starting a deployment.
+ * updating a secret with a sealed value, and starting and following a deployment.
  */
 final class LaravelCloudClient
 {
@@ -63,13 +64,62 @@ final class LaravelCloudClient
     }
 
     /**
-     * POST /environments/{environment}/deployments. Returns the deployment's id.
+     * POST /environments/{environment}/deployments. Returns the deployment's id. Laravel Cloud deploys the newest
+     * commit on the environment's branch. While the environment's resources are still being set up, it queues the
+     * deployment instead (202): that id is returned as "queued:{id}".
      */
     public function deploy(string $environmentId): string
     {
-        $id = $this->expect($this->send('POST', '/environments/'.rawurlencode($environmentId).'/deployments'))['data']['id'] ?? null;
+        $response = $this->send('POST', '/environments/'.rawurlencode($environmentId).'/deployments');
+        $data = $this->expect($response)['data'] ?? [];
+        $id = $data['id'] ?? null;
 
-        return is_string($id) ? $id : '';
+        if (! is_string($id) && ! is_int($id)) {
+            throw new ApiError('Laravel Cloud', $response->status, 'The answer had no deployment in it.');
+        }
+
+        return ($response->status === 202 || ($data['type'] ?? null) === 'queuedDeployments' ? 'queued:' : '').$id;
+    }
+
+    /**
+     * GET /deployments/{id}, or /queued-deployments/{id} for a queued one.
+     */
+    public function deployment(string $deploymentId): DeploymentState
+    {
+        if (str_starts_with($deploymentId, 'queued:')) {
+            return $this->queuedDeployment(substr($deploymentId, 7));
+        }
+
+        $attributes = $this->expect($this->send('GET', '/deployments/'.rawurlencode($deploymentId)))['data']['attributes'] ?? [];
+        $status = (string) ($attributes['status'] ?? 'pending');
+        $reason = is_string($attributes['failure_reason'] ?? null) ? $attributes['failure_reason'] : '';
+
+        return match (true) {
+            $status === 'deployment.succeeded' => DeploymentState::succeeded(),
+            in_array($status, ['failed', 'build.failed', 'deployment.failed', 'cancelled'], true) => DeploymentState::failed($reason !== '' ? $reason : "It ended as {$status}."),
+            default => DeploymentState::running(),
+        };
+    }
+
+    private function queuedDeployment(string $queuedId): DeploymentState
+    {
+        $json = $this->expect($this->send('GET', '/queued-deployments/'.rawurlencode($queuedId).'?include=deployment'));
+        $attributes = $json['data']['attributes'] ?? [];
+        $status = (string) ($attributes['status'] ?? 'pending');
+
+        if ($status === 'promoted') {
+            $deploymentId = $json['data']['relationships']['deployment']['data']['id'] ?? null;
+
+            return is_string($deploymentId) || is_int($deploymentId) ? $this->deployment((string) $deploymentId) : DeploymentState::running();
+        }
+
+        if ($status === 'pending') {
+            return DeploymentState::running();
+        }
+
+        $reason = is_string($attributes['failure_reason'] ?? null) ? $attributes['failure_reason'] : "The queued deployment ended as {$status}.";
+
+        return DeploymentState::failed($reason);
     }
 
     /**

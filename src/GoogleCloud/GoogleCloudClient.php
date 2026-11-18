@@ -12,6 +12,7 @@ use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 use DateTimeImmutable;
 use DateTimeZone;
+use InvalidArgumentException;
 
 /**
  * The Google Cloud IAM calls the runner needs: list, make, disable and delete a service account's keys.
@@ -120,6 +121,33 @@ final class GoogleCloudClient
         if (! $response->successful()) {
             throw new ApiError('Google Cloud', $response->status, 'The access token was refused.');
         }
+    }
+
+    /**
+     * Calls another Google Cloud API (such as Secret Manager) with the same access. Only Google's own *.googleapis.com
+     * addresses are allowed, so the token can't be sent anywhere else.
+     *
+     * @param  array<string, mixed>|null  $json
+     * @return array<string, mixed>
+     */
+    public function call(string $method, string $url, ?array $json = null): array
+    {
+        $host = (string) parse_url($url, PHP_URL_HOST);
+
+        if (parse_url($url, PHP_URL_SCHEME) !== 'https' || ! str_ends_with($host, '.googleapis.com')) {
+            throw new InvalidArgumentException('The runner only sends its Google Cloud access to Google\'s own addresses.');
+        }
+
+        return $this->expect($this->http->send(new Request($method, $url, ['Authorization' => 'Bearer '.$this->token()], $json)));
+    }
+
+    /**
+     * Proves a new key file works: Google trades it for a token. A brand-new key can take a few seconds before Google
+     * accepts it, so the runner tries again for a while before giving up.
+     */
+    public function verifyKeyFile(string $keyFile): void
+    {
+        (new self($this->http, null, $keyFile, $this->clock, $this->baseUrl))->token();
     }
 
     private function token(): string

@@ -8,6 +8,8 @@ use ComplyRobin\Runner\Exceptions\ApiError;
 use ComplyRobin\Runner\NewKey;
 use ComplyRobin\Runner\Sources\KeySource;
 use ComplyRobin\Runner\Sources\Settings;
+use RuntimeException;
+use Throwable;
 
 /**
  * Google Cloud service account keys. Setting: service_account_email, a service account that exists only for this
@@ -55,6 +57,15 @@ final readonly class GoogleCloudSource implements KeySource
         $id = self::keyId($created['name']);
 
         return new NewKey($id, $created['key_file'], null, substr($id, -4), [], $sensitive);
+    }
+
+    public function verify(array $settings, NewKey $key): void
+    {
+        try {
+            $this->client->verifyKeyFile($key->value());
+        } catch (Throwable) {
+            throw new RuntimeException('Google Cloud did not accept the new key file yet.');
+        }
     }
 
     public function discard(array $settings, NewKey $key): void

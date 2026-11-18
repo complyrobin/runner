@@ -51,6 +51,11 @@ final readonly class AwsSource implements KeySource
         return new NewKey(self::shortId($created['id']), $created['secret'], null, substr($created['id'], -4), ['key_id' => $created['id']]);
     }
 
+    public function verify(array $settings, NewKey $key): void
+    {
+        $this->client->verifyKey((string) $key->part('key_id'), $key->value());
+    }
+
     public function discard(array $settings, NewKey $key): void
     {
         $id = $key->part('key_id');

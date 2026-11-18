@@ -26,6 +26,14 @@ interface KeySource
     public function mint(array $settings, string $keyName, ?int $lifetimeSeconds): NewKey;
 
     /**
+     * Proves the new key works, with one harmless call made with the key itself. Throws when the provider refuses
+     * it. A brand-new key can take a few seconds to be accepted everywhere, so the runner retries for a while.
+     *
+     * @param  array<string, mixed>  $settings
+     */
+    public function verify(array $settings, NewKey $key): void;
+
+    /**
      * Deletes a new key that no destination received.
      *
      * @param  array<string, mixed>  $settings

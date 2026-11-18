@@ -41,6 +41,7 @@ final readonly class Runner
      * @param  list<string>  $secrets  values that must never appear in output
      * @param  (Closure(string): void)|null  $output
      * @param  (Closure(int): void)|null  $sleep
+     * @param  Checker|null  $checker  tests the runner's access when someone pressed Test in ComplyRobin
      */
     public function __construct(
         private ComplyRobinClient $complyRobin,
@@ -48,6 +49,7 @@ final readonly class Runner
         private array $secrets = [],
         ?Closure $output = null,
         ?Closure $sleep = null,
+        private ?Checker $checker = null,
     ) {
         $this->output = $output ?? static function (string $line): void {
             fwrite(STDOUT, $line.PHP_EOL);
@@ -64,12 +66,18 @@ final readonly class Runner
 
         for ($claim = 0; $claim < self::MAX_CLAIMS; $claim++) {
             try {
-                $jobs = $this->complyRobin->claim();
+                $claimed = $this->complyRobin->claim();
             } catch (Throwable $exception) {
                 $this->say('Could not check in with ComplyRobin. '.$this->explain($exception));
 
                 return self::UNREACHABLE;
             }
+
+            if ($claimed->checkRequested && $claim === 0) {
+                $this->test();
+            }
+
+            $jobs = $claimed->jobs;
 
             if ($jobs === []) {
                 break;
@@ -89,6 +97,29 @@ final readonly class Runner
         }
 
         return $exitCode;
+    }
+
+    /**
+     * Someone pressed Test on this runner in ComplyRobin: test each service's access and send the results back.
+     */
+    private function test(): void
+    {
+        if (! $this->checker instanceof Checker) {
+            return;
+        }
+
+        $this->say('ComplyRobin asked for a test of this runner\'s access.');
+        $results = $this->checker->run();
+
+        foreach ($results as $result) {
+            $this->say("{$result['service']}: {$result['message']}");
+        }
+
+        try {
+            $this->complyRobin->sendCheck($results);
+        } catch (Throwable $exception) {
+            $this->say('Could not send the test results to ComplyRobin. '.$this->explain($exception));
+        }
     }
 
     private function handle(Job $job): bool

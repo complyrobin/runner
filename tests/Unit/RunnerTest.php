@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace ComplyRobin\Runner\Tests\Unit;
 
+use ComplyRobin\Runner\Checker;
 use ComplyRobin\Runner\ComplyRobin\ComplyRobinClient;
 use ComplyRobin\Runner\Http\Request;
 use ComplyRobin\Runner\Http\Response;
 use ComplyRobin\Runner\LaravelCloud\LaravelCloudClient;
+use ComplyRobin\Runner\LaravelCloud\LaravelCloudDestination;
 use ComplyRobin\Runner\OpenAi\OpenAiClient;
 use ComplyRobin\Runner\OpenAi\OpenAiSource;
 use ComplyRobin\Runner\Rotator;
@@ -20,7 +22,7 @@ use PHPUnit\Framework\TestCase;
 
 final class RunnerTest extends TestCase
 {
-    private const string RUNNER_TOKEN = 'crr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    private const string RUNNER_TOKEN = 'crr_0193c0de00007000800000000000000a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
     private const string RUN = '0193c0de-0000-7000-8000-000000000001';
 
@@ -40,8 +42,8 @@ final class RunnerTest extends TestCase
         $this->secretKey = $keyPair;  // crypto_box_seal_open takes the whole key pair
 
         $this->http = (new FakeHttpClient)
-            ->on('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
-            ->on('POST /runner/acme/reports', FakeHttpClient::json(['recorded' => true]))
+            ->on('POST /runner/claims', FakeHttpClient::json(['jobs' => [$this->job()]]), FakeHttpClient::json(['jobs' => []]))
+            ->on('POST /runner/reports', FakeHttpClient::json(['recorded' => true]))
             ->on('POST /service_accounts/svc_acct_abc/api_keys', fn (Request $request): Response => FakeHttpClient::json([
                 'object' => 'organization.project.service_account.api_key',
                 'id' => 'key_new',
@@ -69,7 +71,9 @@ final class RunnerTest extends TestCase
                 'attributes' => ['public_key' => base64_encode(sodium_crypto_box_publickey($keyPair))],
             ]]))
             ->on('PATCH /secrets/sec-1', FakeHttpClient::json(['data' => ['id' => 'sec-1', 'attributes' => ['key' => 'OPENAI_API_KEY']]]))
-            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'pending']]]));
+            ->on('GET /v1/models', FakeHttpClient::json(['object' => 'list', 'data' => []]))
+            ->on('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'pending']]]))
+            ->on('GET /deployments/dep-1', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'build.running']]]), FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'deployment.succeeded']]]));
     }
 
     #[Test]
@@ -189,14 +193,112 @@ final class RunnerTest extends TestCase
     }
 
     #[Test]
-    public function it_refuses_a_destination_it_does_not_know(): void
+    public function it_refuses_a_destination_it_does_not_know_before_making_a_key(): void
     {
-        $this->http = $this->withFirstClaim($this->job(['destinations' => [['type' => 'forge', 'secret_id' => 'x', 'secret_name' => 'KEY']]]));
+        $this->http = $this->withFirstClaim($this->job(['destinations' => [['type' => 'netlify', 'secret_name' => 'KEY']]]));
 
         $this->runner()->run();
 
         $this->assertSame('push', $this->reports()[0]['step']);
-        $this->assertStringContainsString("can't update forge secrets yet", $this->reports()[0]['message']);
+        $this->assertStringContainsString("can't update netlify secrets yet", $this->reports()[0]['message']);
+        $this->assertSame([], $this->http->sentTo('POST', '/service_accounts/'));
+    }
+
+    #[Test]
+    public function it_says_which_destination_access_is_missing(): void
+    {
+        $this->http = $this->withFirstClaim($this->job(['destinations' => [['type' => 'forge', 'organisation' => 'acme', 'server_id' => '1', 'site_id' => '2', 'secret_name' => 'OPENAI_API_KEY', 'redeploy' => true]]]));
+
+        $this->runner()->run();
+
+        $this->assertSame('The runner has no Forge access. Set FORGE_API_TOKEN.', $this->reports()[0]['message']);
+    }
+
+    #[Test]
+    public function it_tries_the_new_key_before_handing_it_out_and_deletes_one_that_does_not_work(): void
+    {
+        $this->http = $this->replace('GET /v1/models', FakeHttpClient::json(['error' => ['message' => 'Incorrect API key provided.']], 401));
+
+        $this->assertSame(Runner::ROTATION_FAILED, $this->runner()->run());
+
+        $report = $this->reports()[0];
+        $this->assertSame('verify', $report['step']);
+        $this->assertStringStartsWith('OpenAI made a new key, but it did not work when the runner tried it, so it was deleted again. The old key keeps working.', $report['message']);
+        $this->assertCount(6, $this->http->sentTo('GET', '/v1/models'), 'Tried once, then after each wait.');
+        $this->assertCount(1, $this->http->sentTo('DELETE', '/api_keys/key_new'));
+        $this->assertSame([], $this->http->sentTo('PATCH', '/secrets/'));
+    }
+
+    #[Test]
+    public function it_accepts_a_new_key_whose_service_account_may_not_list_models(): void
+    {
+        $this->http = $this->replace('GET /v1/models', FakeHttpClient::json(['error' => ['message' => 'Insufficient permissions.']], 403));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+    }
+
+    #[Test]
+    public function it_waits_for_the_redeploy_to_finish_before_retiring_the_old_keys(): void
+    {
+        $this->runner()->run();
+
+        $sent = array_map(fn (Request $request): string => $request->method.' '.$request->url, $this->http->sent);
+        $lastPoll = max(array_keys(array_filter($sent, fn (string $line): bool => str_contains($line, 'GET https://cloud.laravel.com/api/deployments/dep-1'))));
+        $retire = array_key_first(array_filter($sent, fn (string $line): bool => str_starts_with($line, 'POST') && str_contains($line, '/projects/proj_abc/api_keys/key_old')));
+
+        $this->assertCount(2, $this->http->sentTo('GET', '/deployments/dep-1'));
+        $this->assertLessThan($retire, $lastPoll);
+        $this->assertContains('Waiting for Laravel Cloud environment env-1 to finish deploying.', $this->output);
+    }
+
+    #[Test]
+    public function it_keeps_the_old_keys_when_the_redeploy_fails_to_finish(): void
+    {
+        $this->http = $this->replace('GET /deployments/dep-1', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'build.failed', 'failure_reason' => 'composer install failed.']]]));
+
+        $this->assertSame(Runner::ROTATION_FAILED, $this->runner()->run());
+
+        $this->assertSame([
+            'run' => self::RUN,
+            'outcome' => 'failed',
+            'step' => 'deploy',
+            'message' => 'The new key is saved, but redeploying Laravel Cloud environment env-1 failed, so the app still uses the old key. The old key keeps working and was not retired. composer install failed.',
+        ], $this->reports()[0]);
+        $this->assertSame([], $this->http->sentTo('POST', '/projects/proj_abc/api_keys/'));
+    }
+
+    #[Test]
+    public function it_stops_waiting_for_a_redeploy_that_never_finishes(): void
+    {
+        $this->http = $this->replace('GET /deployments/dep-1', FakeHttpClient::json(['data' => ['id' => 'dep-1', 'attributes' => ['status' => 'build.running']]]));
+
+        $this->runner()->run();
+
+        $this->assertSame('deploy', $this->reports()[0]['step']);
+        $this->assertStringContainsString('was still going after 20 minutes', $this->reports()[0]['message']);
+        $this->assertSame([], $this->http->sentTo('POST', '/projects/proj_abc/api_keys/'));
+    }
+
+    #[Test]
+    public function it_follows_a_deployment_laravel_cloud_queued(): void
+    {
+        $this->http = $this->replace('POST /environments/env-1/deployments', FakeHttpClient::json(['data' => ['id' => 'qd-1', 'type' => 'queuedDeployments', 'attributes' => ['status' => 'pending']]], 202));
+        $this->http->on('GET /queued-deployments/qd-1', FakeHttpClient::json(['data' => ['id' => 'qd-1', 'attributes' => ['status' => 'promoted'], 'relationships' => ['deployment' => ['data' => ['type' => 'deployments', 'id' => 'dep-1']]]]]));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+        $this->assertSame(['queued:qd-1'], $this->reports()[0]['deployments']);
+    }
+
+    #[Test]
+    public function it_tests_its_access_when_someone_pressed_test_in_complyrobin(): void
+    {
+        $this->http = $this->replace('POST /runner/claims', FakeHttpClient::json(['jobs' => [], 'check_requested' => true]));
+        $this->http->on('GET /organization/projects', FakeHttpClient::json(['data' => []]))
+            ->on('POST /runner/checks', FakeHttpClient::json(['recorded' => true]));
+
+        $this->assertSame(Runner::OK, $this->runner()->run());
+
+        $this->assertSame(['services' => [['service' => 'OpenAI', 'status' => 'ok', 'message' => 'The access works.']]], $this->http->sentTo('POST', '/runner/checks')[0]->json);
     }
 
     #[Test]
@@ -243,7 +345,7 @@ final class RunnerTest extends TestCase
     #[Test]
     public function it_retries_a_report_complyrobin_could_not_take(): void
     {
-        $this->http = $this->replace('POST /runner/acme/reports', new Response(503, ''), FakeHttpClient::json(['recorded' => true]));
+        $this->http = $this->replace('POST /runner/reports', new Response(503, ''), FakeHttpClient::json(['recorded' => true]));
 
         $this->assertSame(Runner::OK, $this->runner()->run());
         $this->assertCount(2, $this->reports());
@@ -252,7 +354,7 @@ final class RunnerTest extends TestCase
     #[Test]
     public function it_resends_only_the_essentials_when_complyrobin_refuses_part_of_a_success(): void
     {
-        $this->http = $this->replace('POST /runner/acme/reports', FakeHttpClient::json(['message' => 'Invalid.', 'errors' => ['deployments.0' => ['Looks like a key.']]], 422), FakeHttpClient::json(['recorded' => true]));
+        $this->http = $this->replace('POST /runner/reports', FakeHttpClient::json(['message' => 'Invalid.', 'errors' => ['deployments.0' => ['Looks like a key.']]], 422), FakeHttpClient::json(['recorded' => true]));
 
         $this->assertSame(Runner::OK, $this->runner()->run());
         $this->assertSame(['run', 'outcome', 'rotated_at', 'new_key', 'old_keys_expire_at'], array_keys($this->reports()[1]));
@@ -261,7 +363,7 @@ final class RunnerTest extends TestCase
     #[Test]
     public function it_says_so_when_nothing_is_due(): void
     {
-        $this->http = $this->replace('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => []]));
+        $this->http = $this->replace('POST /runner/claims', FakeHttpClient::json(['jobs' => []]));
 
         $this->assertSame(Runner::OK, $this->runner()->run());
         $this->assertSame(['Nothing is due for rotation.'], $this->output);
@@ -270,7 +372,7 @@ final class RunnerTest extends TestCase
     #[Test]
     public function it_stops_when_complyrobin_refuses_the_token(): void
     {
-        $this->http = $this->replace('POST /runner/acme/claims', FakeHttpClient::json(['message' => 'Unauthenticated.'], 401));
+        $this->http = $this->replace('POST /runner/claims', FakeHttpClient::json(['message' => 'Unauthenticated.'], 401));
 
         $this->assertSame(Runner::UNREACHABLE, $this->runner()->run());
         $this->assertSame(['Could not check in with ComplyRobin. ComplyRobin answered 401. Unauthenticated.'], $this->output);
@@ -292,13 +394,16 @@ final class RunnerTest extends TestCase
         $clock = static fn (): DateTimeImmutable => new DateTimeImmutable('2026-11-17T10:00:00', new DateTimeZone('UTC'));
 
         return new Runner(
-            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', 'acme', self::RUNNER_TOKEN),
-            new Rotator(['openai' => new OpenAiSource(new OpenAiClient($this->http, 'sk-admin-test'))], new LaravelCloudClient($this->http, 'lc-token'), $clock, $mask),
+            new ComplyRobinClient($this->http, 'https://api.complyrobin.com/v1', self::RUNNER_TOKEN),
+            new Rotator(['openai' => new OpenAiSource(new OpenAiClient($this->http, 'sk-admin-test'))], ['laravel_cloud' => new LaravelCloudDestination(new LaravelCloudClient($this->http, 'lc-token'))], $clock, $mask, sleep: static function (int $seconds): void {}, progress: function (string $line): void {
+                $this->output[] = $line;
+            }),
             [self::RUNNER_TOKEN],
             function (string $line): void {
                 $this->output[] = $line;
             },
             static function (int $seconds): void {},
+            new Checker(['OpenAI' => new OpenAiSource(new OpenAiClient($this->http, 'sk-admin-test'))]),
         );
     }
 
@@ -307,7 +412,7 @@ final class RunnerTest extends TestCase
      */
     private function reports(): array
     {
-        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/acme/reports'));
+        return array_map(fn (Request $request): array => $request->json, $this->http->sentTo('POST', '/runner/reports'));
     }
 
     private function replace(string $route, Response ...$answers): FakeHttpClient
@@ -321,7 +426,7 @@ final class RunnerTest extends TestCase
 
     private function withFirstClaim(array $job): FakeHttpClient
     {
-        return $this->replace('POST /runner/acme/claims', FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []]));
+        return $this->replace('POST /runner/claims', FakeHttpClient::json(['jobs' => [$job]]), FakeHttpClient::json(['jobs' => []]));
     }
 
     private function job(array $overrides = []): array
