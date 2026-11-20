@@ -1,11 +1,13 @@
 name: Release
 
-# Push a tag such as v0.1.0 to release. This publishes the GitHub release, moves the major tag (v0) that customers'
+# To release: open Actions, pick "Release" and press "Run workflow" on main. It tags main with the runner's own version
+# (Runner::VERSION, e.g. v0.1.0) and releases that. Pushing such a tag by hand does the same. This publishes the GitHub release, moves the major tag (v0) that customers'
 # workflows use, and publishes the container image to ghcr.io/complyrobin/runner. Packagist picks the tag up by itself
 # once the repository is submitted there.
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,21 +19,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The tag matches the runner's version
+      - name: The tag is the runner's version
+        id: version
         run: |
           version="$(php bin/complyrobin-runner --version | awk '{print $2}')"
-          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "Runner::VERSION is ${version}, the tag is ${GITHUB_REF_NAME}"; exit 1; }
+          tag="v${version}"
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            test "${GITHUB_REF}" = "refs/heads/main" || { echo "Run this on main, not ${GITHUB_REF_NAME}"; exit 1; }
+            git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null && { echo "${tag} is released already. Raise Runner::VERSION first."; exit 1; }
+            git tag "${tag}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${tag}"
+          else
+            test "${tag}" = "${GITHUB_REF_NAME}" || { echo "Runner::VERSION is ${version}, the tag is ${GITHUB_REF_NAME}"; exit 1; }
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "major=${tag%%.*}" >> "$GITHUB_OUTPUT"
 
       - name: Move the major tag
         run: |
-          major="${GITHUB_REF_NAME%%.*}"
-          git tag -f "${major}" "${GITHUB_SHA}"
-          git push -f origin "refs/tags/${major}"
+          git tag -f "${{ steps.version.outputs.major }}" "${GITHUB_SHA}"
+          git push -f origin "refs/tags/${{ steps.version.outputs.major }}"
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+        run: gh release create "${{ steps.version.outputs.tag }}" --generate-notes --verify-tag
 
       - uses: docker/setup-buildx-action@v3
 
@@ -44,8 +58,7 @@ jobs:
       - name: Image tags
         id: tags
         run: |
-          major="${GITHUB_REF_NAME%%.*}"
-          echo "list=ghcr.io/complyrobin/runner:${GITHUB_REF_NAME},ghcr.io/complyrobin/runner:${major},ghcr.io/complyrobin/runner:latest" >> "$GITHUB_OUTPUT"
+          echo "list=ghcr.io/complyrobin/runner:${{ steps.version.outputs.tag }},ghcr.io/complyrobin/runner:${{ steps.version.outputs.major }},ghcr.io/complyrobin/runner:latest" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
